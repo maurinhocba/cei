@@ -196,15 +196,15 @@ class ElmFrame2D:
     """
     
 
-class Struc2D2Dof:
+class Struc2D3Dof:
     """
-    General bidimensional structure with 2 DoF per node
+    General bidimensional structure with 3 DoF per node
     """
     
     def __init__(self):
-        # self.nodes = [] # asegurarse de que esto es una lista de punteros
-        self.nodes = {} # asegurarse de que esto es una lista de punteros
-        self.elmts = [] # asegurarse de que esto es una lista de punteros
+        # self.nodes = []
+        self.nodes = {}
+        self.elmts = []
         self.ndofn = int(0)
         self.K_full = dpm()
         self.K_wBCs = dpm()
