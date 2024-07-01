@@ -16,7 +16,7 @@ COSAS POR IMPLEMENTAR
 """
 
 import numpy as np
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt
 
 
 # CLASSES
@@ -28,8 +28,8 @@ class Load:
     def __init__(self, extLab: int, type: int, **kwargs):
         # acá hay que implementar cosas con try except
         if type==1:
-            if loaVal in kwars:
-                self.loaVal = loaVal
+            if 'loaVal' in kwargs.keys():
+                self.loaVal = kwargs['loaVal']
             else:
                 pass
         else:
@@ -45,7 +45,7 @@ class Node:
     
     def __init__(self, extLab: int, coords: np.array([], dtype=float)):
         self.extLab = extLab
-        self.coords = np.array([], dtype=float)
+        self.coords = coords
         
         self.intLab = int(0)                        # internal label, assigned when added to struct
         self.dofLab = np.array([], dtype=int)       # DoFs' labels, assigned when added to struct
@@ -63,6 +63,31 @@ class Node:
         self.dofVal = dofVal
 
 
+class dpm:
+    """
+    dynamic property matrix
+    has a matrix and
+    a vector indicating the numbers of equations to which the rows and cols refer to
+    """
+    
+    def __init__(self):
+        self.mtx = np.array([], dtype=float)
+        self.dof = np.array([], dtype=int)
+        
+    def set_mtx_dof(self, mtx, dof):
+        if mtx.ndim != 2:
+            print('ERROR: trying to set a dynamic property matrix with more or less than 2 dimensions.')
+        else:
+            if mtx.shape[0]!=mtx.shape[1]:
+                print('ERROR: trying to set a dynamic property matrix with different number of rows and cols.')
+            else:
+                if dof.ndim!=1 or dof.shape[0]!=mtx.shape[0]:
+                    print('ERROR: trying to set a dynamic property matrix with a wrong DoF vector.')
+                else:
+                    self.mtx = mtx
+                    self.dof = dof
+
+
 class ElmFrame2D:
     """
     2D Frame beam element.
@@ -73,22 +98,44 @@ class ElmFrame2D:
     
     def __init__(self, extLab: int, nodes: list, E: float, A: float, I: float, joints='none'):
         self.extLab = extLab
-        self.nodes  = nodes     # list of nodes - should be pointers to node class instances
-                                #   -->> además, habría que asegurarse que es una lista de dos nodos con dos coordenadas y tres GL <<--
+        self.nodes  = nodes     # list of external labels of nodes
         self.joints = joints    # one of 'none', 'first', 'second' and 'both'
         self.E      = E         # Young's modulus
         self.A      = A         # sectional area
         self.I      = I         # sectional inertia about z-axis
         
-        self.L      = float(0)                      # length
-        self.t      = np.array([], dtype=float)     # unit vector
-        self.K_loc  = stiffM(self, local=True )     # stiffness matrix in local  coordinates
-        self.K_glo  = stiffM(self, local=False)     # stiffness matrix in global coordinates
-        
-        self.dofLab = np.array([], dtype=int)       # DoFs' labels, assigned when added to struct
-        
-        self.length_and_uVectr()
-
+        self.ndofpn = []                        # list - number of DoFs per node
+        self.dofpn  = ''                        # string - DoFs per node
+        self.L      = float(0)                  # length
+        self.t      = np.array([], dtype=float) # unit vector
+        self.K_loc  = dpm()                     # stiffness matrix in local  coordinates
+        self.K_glo  = dpm()                     # stiffness matrix in global coordinates
+        self.dofLab = np.array([], dtype=int)   # DoFs' labels, assigned when added to struct
+    
+    def dofPerNode(self):
+        if self.joints=='none':
+            # Stiffness matrix for displacements vector of the form:
+            # U_ij = [  u_i^x  u_i^y  phi_i^z  |  u_j^x  u_j^y  phi_j^z  ]^T
+            self.ndofpn=[3, 3]
+            self.dofpn='[  u_i^x  u_i^y  phi_i^z  |  u_j^x  u_j^y  phi_j^z  ]^T'
+        elif self.joints=='first':
+            # Stiffness matrix for displacements vector of the form:
+            # U_ij = [  u_i^x  u_i^y  |  u_j^x  u_j^y  phi_j^z  ]^T
+            self.ndofpn=[2, 3]
+            self.dofpn='[  u_i^x  u_i^y  |  u_j^x  u_j^y  phi_j^z  ]^T'
+        elif self.joints=='second':
+            # Stiffness matrix for displacements vector of the form:
+            # U_ij = [  u_i^x  u_i^y  phi_i^z  |  u_j^x  u_j^y  ]^T
+            self.ndofpn=[3, 2]
+            self.dofpn='[  u_i^x  u_i^y  phi_i^z  |  u_j^x  u_j^y  ]^T'
+        elif self.joints=='second':
+            # Stiffness matrix for displacements vector of the form:
+            # U_ij = [  u_i^x  u_i^y  |  u_j^x  u_j^y  ]^T
+            self.ndofpn=[2, 2]
+            self.dofpn='[  u_i^x  u_i^y  |  u_j^x  u_j^y  ]^T'
+        else:
+            print('ERROR: undefined flag for nodes: joints='+self.joints)
+    
     def length_and_uVectr(self):
         vect = self.nodes[1] - self.nodes[0]
         self.L = np.norm( vect )
@@ -118,7 +165,7 @@ class ElmFrame2D:
         D = gamma2**2*k + gamma1**2*k1;
         E = gamma1*k2;
         
-        if joints=='none':
+        if self.joints=='none':
             # Stiffness matrix for displacements vector of the form:
             # U_ij = [  u_i^x  u_i^y  phi_i^z  |  u_j^x  u_j^y  phi_j^z  ]^T
             K = np.array( [ [ A,  B, -C,     -A, -B, -C   , ],
@@ -132,8 +179,13 @@ class ElmFrame2D:
             
         else:
             print('ERROR: beams with joints not implemented yet - stiffness matrix determination of beam no. '+self.extLab)
+    
+    def detStiff(self):
+        self.length_and_uVectr()
+        self.K_loc  = self.stiffM(self, local=True )     # stiffness matrix in local  coordinates
+        self.K_glo  = self.stiffM(self, local=False)     # stiffness matrix in global coordinates
             
-    def set_DoF_labels(self):
+    """def set_DoF_labels(self):
         if joints=='none':
             # Stiffness matrix for displacements vector of the form:
             # U_ij = [  u_i^x  u_i^y  phi_i^z  |  u_j^x  u_j^y  phi_j^z  ]^T
@@ -141,6 +193,7 @@ class ElmFrame2D:
         
         else:
             print('ERROR: beams with joints not implemented yet - stiffness matrix determination of beam no. '+self.extLab)
+    """
     
 
 class Struc2D2Dof:
@@ -149,51 +202,95 @@ class Struc2D2Dof:
     """
     
     def __init__(self):
-        self.nodes = [] # asegurarse de que esto es una lista de punteros
+        # self.nodes = [] # asegurarse de que esto es una lista de punteros
+        self.nodes = {} # asegurarse de que esto es una lista de punteros
         self.elmts = [] # asegurarse de que esto es una lista de punteros
         self.ndofn = int(0)
-        self.K_full = np.array([], dtype=float)
-        self.K_wBCs = np.array([], dtype=float)
-        self.K_cc   = np.array([], dtype=float)
-        self.K_hc   = np.array([], dtype=float)
-        self.K_hh   = np.array([], dtype=float)
-        self.K_cond = np.array([], dtype=float)
+        self.K_full = dpm()
+        self.K_wBCs = dpm()
+        self.K_cc   = dpm()
+        self.K_hc   = dpm()
+        self.K_hh   = dpm()
+        self.K_cond = dpm()
 
     def add_node(self, node):
+        
+        # VERIFICAR QUE LA ETIQUETA EXTERNA NO EXISTA
+        
         if self.K_full.size > 0:
-            print('ERROR: trying to add a node to a structure whose stiffness matriz has already been calculated.')
+            print('ERROR: trying to add a node to a structure whose stiffness matrix has already been calculated.')
             exit()
         else:
             if node.coords.size==2:
-                self.nodos.append(node)
+                # self.nodos.append(node)
+                self.nodes[node]=[]
                 node.intLab=len(self.nodes)
-                node.dofLab=np.arange( self.ndofn, self.ndofn+2 )
-                self.ndofn = self.ndofn+2
             else:
                 print('ERROR: trying to add a node with inconsistent number of coordinates (should be 2).')
                 exit()
 
     def add_elm(self, elm):
+        
+        # VERIFICAR QUE LA ETIQUETA EXTERNA NO EXISTA
+        
         if self.K_full.size > 0:
-            print('ERROR: trying to add an element to a structure whose stiffness matriz has already been calculated.')
+            print('ERROR: trying to add an element to a structure whose stiffness matrix has already been calculated.')
             exit()
         else:
             if isinstance( ElmFrame2D, elm):
-                # VERIFICAR SI LOS NODOS DEL ELEMENTO EXISTEN EN LA ESTRUCTURA
-                self.elmts.append(elm)
-                elm.set_DoF_labels()
+                # verify that the nodes defining the beam exist in the structure
+                verif=[]
+                i=-1
+                for targetNode in elm.nodes:
+                    verif.append(False)
+                    i=i+1
+                    for possibleNode in self.nodes.keys():
+                        if targetNode==possibleNode.extLab:
+                            # self.nodes[possibleNode].append([elm.extLab, i, elm.ndofpn[i])
+                            verif[-1]=True
+                            break
+                if all(verif):
+                    self.elmts.append(elm)
+                    elm.detStiff()
+                else:
+                    print('ERROR: nodes not in structure - beam no. '+elm.extLab)
+                    exit()
             else:
                 print('ERROR: element type not supported - element no. '+elm.extLab)
 
+    def eqnums(self):
+        # determine number of eq. per node and their labels
+        for node, data in self.nodes.items():
+            ndof=0
+            for lst in data:
+                if ndof<data[-1]:
+                    ndof=data[-1]
+            node.dofLab=np.arange( self.ndofn, self.ndofn+ndof-1 )
+            self.ndofn = self.ndofn+ndof
+        
     def ensamblar_matriz_rigidez(self):
-        n_dofs = sum([len(nodo.grados_libertad) for nodo in self.nodos])
-        self.matriz_rigidez_global = np.zeros((n_dofs, n_dofs))
-        # Ensamblaje de la matriz de rigidez global
-        for elemento in self.elementos:
-            k_local = elemento.rigidez
-            # Mapeo de índices locales a globales
-            # Agregar k_local a la posición correcta en matriz_rigidez_global
-            pass
+        # determine number of eq. per node and their labels 
+        self.eqnums()
+        
+        # prepare full matrix for assembling
+        self.K_full.mtx = np.zeros((self.ndofn, self.ndofn))
+        self.K_full.dof = np.arange(0, self.ndofn-1)
+        
+        # assembly
+        for elm in self.elmts:
+            # assing DoFs (eqs) numbers to element
+            for targetNode in elm.nodes:
+                for possibleNode in self.nodes.keys():
+                    if targetNode==possibleNode.extLab:
+                        elm.dofLab=np.concatenate((elm.dofLab,possibleNode.dofLab),axis=0)
+                        break
+            
+            # assemble
+            # iterate over element's DoFs
+            it = np.nditer(elm.dofLab, flags=['f_index'])
+            # and assemble the element matrix one row at a time
+            for dof in it:
+                self.K_full.mtx[dof,elm.dofLab]=elm.K_glo[it.index,:]
 
     def aplicar_condiciones_frontera(self, condiciones):
         # Modificación de la matriz y vector de cargas según las condiciones de frontera
@@ -202,3 +299,22 @@ class Struc2D2Dof:
     def resolver(self):
         # Implementación del solucionador del sistema de ecuaciones
         pass
+
+
+# RUN
+if __name__ == '__main__':
+    
+    n1=Node(10, np.array([0,0  ], dtype=float))
+    n2=Node(20, np.array([0,5.5], dtype=float))
+    n3=Node(30, np.array([3,0  ], dtype=float))
+    n4=Node(40, np.array([3,5.5], dtype=float))
+    
+    elm1=ElmFrame2D(1, [10,20], 210e3, 100, 10**4/12)
+    elm2=ElmFrame2D(2, [10,40], 210e3, 100, 10**4/12)
+    elm3=ElmFrame2D(3, [20,40], 210e3, 100, 10**4/12, joints='both')
+    
+    
+    
+    
+    
+    
