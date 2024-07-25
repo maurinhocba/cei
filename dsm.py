@@ -15,6 +15,7 @@ COSAS POR IMPLEMENTAR
 - Struc2D2Dof: crear variables (o algún método) para llevar la cuenta de a qué GL corresponde cada fila/columna de cada matriz de rigidez
 """
 
+# IMPORTING ZONE
 import numpy as np
 # import matplotlib.pyplot as plt
 
@@ -201,7 +202,8 @@ class Struc2D3Dof:
     General bidimensional structure with 3 DoF per node
     """
     
-    def __init__(self):
+    def __init__(self, name='New Project'):
+        selt.name  = name
         # self.nodes = []
         self.nodes = {}
         self.elmts = []
@@ -213,7 +215,7 @@ class Struc2D3Dof:
         self.K_hh   = dpm()
         self.K_cond = dpm()
 
-    def add_node(self, node):
+    def add_node(self, node: Node):
         
         # VERIFICAR QUE LA ETIQUETA EXTERNA NO EXISTA
         
@@ -304,17 +306,19 @@ class Struc2D3Dof:
 # RUN
 if __name__ == '__main__':
     
-    n1=Node(10, np.array([0,0  ], dtype=float))
-    n2=Node(20, np.array([0,5.5], dtype=float))
-    n3=Node(30, np.array([3,0  ], dtype=float))
-    n4=Node(40, np.array([3,5.5], dtype=float))
+    if True:
+        n1=Node(10, np.array([0,0  ], dtype=float))
+        n2=Node(20, np.array([0,5.5], dtype=float))
+        n3=Node(30, np.array([3,0  ], dtype=float))
+        n4=Node(40, np.array([3,5.5], dtype=float))
+        
+        elm1=ElmFrame2D(1, [10,20], 210e3, 100, 10**4/12)
+        elm2=ElmFrame2D(2, [10,40], 210e3, 100, 10**4/12)
+        elm3=ElmFrame2D(3, [20,40], 210e3, 100, 10**4/12, joints='both')
     
-    elm1=ElmFrame2D(1, [10,20], 210e3, 100, 10**4/12)
-    elm2=ElmFrame2D(2, [10,40], 210e3, 100, 10**4/12)
-    elm3=ElmFrame2D(3, [20,40], 210e3, 100, 10**4/12, joints='both')
     
-    
-    
+    if False:
+        pass
     
     
     
