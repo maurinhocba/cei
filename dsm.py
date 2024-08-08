@@ -6,13 +6,11 @@ Mauro S. Maza - FCEFyN (UNC) - 2024-06-23
 
 """
 COSAS POR IMPLEMENTAR
-- ElmFrame2D: asegurarse que "nodes" es una lista de dos nodos
-- ElmFrame2D: asegurarse que "nodes" es una lista de punteros y no copias
 - ElmFrame2D: incorporar la opción para articular extremos
-- Node.add_dofs: asegurarse que el arreglo quede como vector columna
-- Struc2D2Dof: asegurarse que "nodes" es una lista de punteros y no copias
-- Struc2D2Dof: asegurarse que "elems" es una lista de punteros y no copias
-- Struc2D2Dof: crear variables (o algún método) para llevar la cuenta de a qué GL corresponde cada fila/columna de cada matriz de rigidez
+- Node.add_dofs: asegurarse que el arreglo quede como vector columna    
+        # IMPLEMENTAR MÉTODO PARA AGREGAR MUCHOS NODOS Y MUCHOS ELEMENTOS A LA VEZ
+        # IMPLEMENTAR MÉTODO PARA ACTUALIZAR COORDENADAS DE UN PUNTO
+        # PROBAR SI AL CAMBIAR LAS COORDENADA DE UN NODO, SE ACTUALIZA LA REFERENCIA EN EL ELEMENTO
 """
 
 # IMPORTING ZONE
@@ -49,7 +47,7 @@ class Node:
         self.coords = coords
         
         self.intLab = int(0)                        # internal label, assigned when added to struct
-        self.dofLab = np.array([], dtype=int)       # DoFs' labels, assigned when added to struct
+        self.dofLab = np.array([], dtype=int)       # DoFs' labels, assigned befor assembly
         self.dofVal = np.array([], dtype=float)     # actual value of DoFs
         self.loads  = {}                            # dict {DOF: load}
 
@@ -204,9 +202,10 @@ class Struc2D3Dof:
     
     def __init__(self, name='New Project'):
         self.name  = name
-        self.description  = ''
-        self.nodes = {}
+        self.desc  = ''
+        self.nodes = {}         # {extLab:[node_object]}
         self.elmts = {}
+        self.eqLab = {}         # {eqLab:[node_object local_DoF_0->2]}
         self.ndofn = int(0)
         self.K_full = dpm()
         self.K_wBCs = dpm()
@@ -295,33 +294,40 @@ class Struc2D3Dof:
                   f'       elem external label: {elm.extLab}')
     
     def eqnums(self):
-        # determine number of eq. per node and their labels
-        for node, data in self.nodes.items():
-            ndof=0
-            for lst in data:
-                if ndof<data[-1]:
-                    ndof=data[-1]
-            node.dofLab=np.arange( self.ndofn, self.ndofn+ndof-1 )
-            self.ndofn = self.ndofn+ndof
+        # determine an eq. label for each node's DoF
+        for node in self.nodes.values():
+            # assign eq. numbers to node's DoFs
+            node.dofLab=np.arange( self.ndofn, self.ndofn+3 )
+            # constructu dict. for labeling translation
+            for idx, eqLab in enumerate(node.dofLab)
+                self.eqLab[eqLab]=[node idx]
+            # update number of DoFs in problem
+            self.ndofn = self.ndofn+3
+            
+        # assign eq. labels to elements
+        for elm in self.elmts:
+            for node in elm.nodes:
+                elm.dofLab=np.concatenate((elm.dofLab,targetNode.dofLab),axis=0)
+            # for targetNode in elm.nodes:
+                # for possibleNode in self.nodes.keys():
+                    # if targetNode.extLab==possibleNode:
+                        # elm.dofLab=np.concatenate((elm.dofLab,targetNode.dofLab),axis=0)
+                        # break
+                # else:
+                    # continue
+                # break
         
-    def ensamblar_matriz_rigidez(self):
+    def assemble_K(self):
         # determine number of eq. per node and their labels 
         self.eqnums()
         
         # prepare full matrix for assembling
-        self.K_full.mtx = np.zeros((self.ndofn, self.ndofn))
-        self.K_full.dof = np.arange(0, self.ndofn-1)
+        mtx = np.zeros((self.ndofn, self.ndofn))
+        dof = np.arange(0, self.ndofn-1)
+        self.K_full.set_mtx_dof(mtx, row=dof, col=dof)
         
         # assembly
-        for elm in self.elmts:
-            # assing DoFs (eqs) numbers to element
-            for targetNode in elm.nodes:
-                for possibleNode in self.nodes.keys():
-                    if targetNode==possibleNode.extLab:
-                        elm.dofLab=np.concatenate((elm.dofLab,possibleNode.dofLab),axis=0)
-                        break
-            
-            # assemble
+        for elm in self.elmts: 
             # iterate over element's DoFs
             it = np.nditer(elm.dofLab, flags=['f_index'])
             # and assemble the element matrix one row at a time
@@ -372,9 +378,6 @@ if __name__ == '__main__':
             str.add_elm(elm1)
             str.add_elm(elm2)
             str.add_elm(elm3)
-            
-        # IMPLEMENTAR MÉTODO PARA ACTUALIZAR COORDENADAS DE UN PUNTO
-        # PROBAR SI AL CAMBIAR LAS COORDENADA DE UN NODO, SE ACTUALIZA LA REFERENCIA EN EL ELEMENTO
         
         # assemble global stiffness matrix
         
