@@ -15,26 +15,11 @@ COSAS POR IMPLEMENTAR
 
 # IMPORTING ZONE
 import numpy as np
+from typing import List
 # import matplotlib.pyplot as plt
 
 
 # CLASSES
-class Load:
-    """
-    general load
-    """
-    
-    def __init__(self, extLab: int, type: int, **kwargs):
-        # acá hay que implementar cosas con try except
-        if type==1:
-            if 'loaVal' in kwargs.keys():
-                self.loaVal = kwargs['loaVal']
-            else:
-                pass
-        else:
-            pass
-    
-    
 class Node:
     """
     general node
@@ -47,7 +32,7 @@ class Node:
         self.coords = coords
         
         self.intLab = int(0)                        # internal label, assigned when added to struct
-        self.dofLab = np.array([], dtype=int)       # DoFs' labels, assigned befor assembly
+        self.dofLab = np.array([], dtype=int)       # global DoFs' labels, assigned befor assembly
         self.dofVal = np.array([], dtype=float)     # actual value of DoFs
         self.loads  = {}                            # dict {DOF: load}
 
@@ -71,10 +56,12 @@ class dpm:
     
     def __init__(self):
         self.mtx = np.array([], dtype=float)
-        self.row = np.array([], dtype=int)
-        self.col = np.array([], dtype=int)
+        self.row = np.array([], dtype=int)      # labels of global DoFs associated to each row of matrix
+        self.col = np.array([], dtype=int)      # labels of global DoFs associated to each col of matrix
         
-    def set_mtx_dof(self, mtx, row, col):
+    def set_mtx_dof(self, mtx: np.array([], dtype=float),
+                          row: np.array([], dtype=int  ),
+                          col: np.array([], dtype=int  )):
         if mtx.ndim != 2:
             print('ERROR: trying to set a dynamic property matrix with more or less than 2 dimensions.')
         else:
@@ -94,21 +81,27 @@ class ElmFrame2D:
         thus, might be a Truss bar.
     """
     
-    def __init__(self, extLab: int, nodes: list, E: float, A: float, I: float, joints='none'):
+    def __init__(self, extLab: int, nodes: List[Node], E: float, A: float, I: float, joints='none'):
+        
+        if not all(isinstance(node, Node) for node in nodes):
+            raise ValueError( 'ERROR: ElmFrame2D 2nd arg. shall be a list of 2 Node objects\n'
+                             f'       trying to create elem no. {extLab}')
+            
         self.extLab = extLab
-        self.nodes  = nodes     # list of nodes
+        self.nodes  = nodes     # list of node objects
         self.joints = joints    # one of 'none', 'first', 'second' and 'both'
         self.E      = E         # Young's modulus
         self.A      = A         # sectional area
         self.I      = I         # sectional inertia about z-axis
         
+        self.intLab = int(0)                    # internal label, assigned when added to struct
         self.ndofpn = []                        # list - number of DoFs per node
         self.dofpn  = ''                        # string - DoFs per node
         self.L      = float(0)                  # length
         self.t      = np.array([], dtype=float) # unit vector
         self.K_loc  = np.array([], dtype=float) # stiffness matrix in local  coordinates
         self.K_glo  = np.array([], dtype=float) # stiffness matrix in global coordinates
-        self.dofLab = np.array([], dtype=int)   # DoFs' labels, assigned when added to struct
+        self.dofLab = np.array([], dtype=int)   # DoFs' labels, assigned on assembly
     
     def dofPerNode(self):
         if self.joints=='none':
@@ -132,7 +125,8 @@ class ElmFrame2D:
             self.ndofpn=[2, 2]
             self.dofpn='[  u_i^x  u_i^y  |  u_j^x  u_j^y  ]^T'
         else:
-            print(f'ERROR: "{self.joints}" is an undefined flag for joints')
+            print(f'ERROR: "{self.joints}" is an undefined flag for joints\n'
+                  f'       determination of number of DoF per node of elem no. {self.extLab}')
     
     def length_and_uVectr(self):
         vect = self.nodes[1].coords - self.nodes[0].coords
@@ -176,8 +170,9 @@ class ElmFrame2D:
             return K
             
         else:
+            # if self.joints!='none', then self.dofLab should be updated (eliminating elements)
             print( 'ERROR: beams with joints not implemented yet\n'
-                  f'       stiffness matrix determination of beam no. {self.extLab}')
+                  f'       stiffness matrix determination of elem no. {self.extLab}')
     
     def detStiff(self):
         self.length_and_uVectr()
@@ -203,70 +198,80 @@ class Struc2D3Dof:
     def __init__(self, name='New Project'):
         self.name  = name
         self.desc  = ''
-        self.nodes = {}         # {extLab:[node_object]}
-        self.elmts = {}
+        self.nodes = []         # list of node objects
+        self.elmts = []         # list of elem objects
         self.eqLab = {}         # {eqLab:[node_object local_DoF_0->2]}
         self.ndofn = int(0)
+        
         self.K_full = dpm()
         self.K_wBCs = dpm()
         self.K_cc   = dpm()
         self.K_hc   = dpm()
         self.K_hh   = dpm()
         self.K_cond = dpm()
+        
+        self.BCs   = []         # [ [node_extLab DoF_locLab value] ]
+        self.loads = []         # [ [node_extLab DoF_locLab value] ]
 
-    def add_node(self, node: Node):
-        if self.K_full.mtx.size > 0:
-            print('WARNING: trying to add a node to a structure\n'
-                  '         whose stiffness matrix has already been calculated.\n'
-                  '         RECALC')
+    def add_node(self, newNode: Node):
+        # verify that the node does not exist yet
+        if any(newNode is oldNode for oldNode in self.nodes):
+            print( 'ERROR: trying to add a node that already exists in the structure\n'
+                   '       node not added\n'
+                  f'       node external label: {newNode.extLab}')
         else:
-            if node.coords.size==2:
-                if node.extLab in self.nodes.keys():
+            if newNode.coords.size==2:
+                # verify that the external label of the node does not exist yet
+                if newNode.extLab in [oldNode.extLab for oldNode in self.nodes]:
+                #if any(newNode.extLab == oldNode.extLab for oldNode in self.nodes):
                     print( 'ERROR: trying to add a node with an existing external label\n'
                            '       node not added\n'
-                          f'       node external label: {node.extLab}')
+                          f'       node external label: {newNode.extLab}')
                 else:
-                    self.nodes[node.extLab]=[node]
-                    node.intLab=len(self.nodes)
+                    newNode.intLab=len(self.nodes)
+                    self.nodes.append(newNode)
+                    if self.K_full.mtx.size > 0:
+                        print('WARNING: trying to add a node to a structure\n'
+                              '         whose global stiffness matrix has already been calculated.\n'
+                              '         RECALC')
             else:
                 print( 'ERROR: trying to add a node with inconsistent number of coordinates (should be 2)\n'
                        '       node not added\n'
-                      f'       node external label: {node.extLab}')
+                      f'       node external label: {newNode.extLab}')
     
     def create_node(self, extLab: int, coords: np.array([], dtype=float)):
         node=Node(extLab, coords)
         self.add_node(node)
     
-    def add_elm(self, elm):
-        if self.K_full.mtx.size > 0:
-            print('WARNING: trying to add an element to a structure\n'
-                  '         whose stiffness matrix has already been calculated.\n'
-                  '         RECALC')
-        else:
-            if isinstance( elm, ElmFrame2D):
-                # verify that the nodes defining the beam exist in the structure
-                verif=[]
-                for targetNode in elm.nodes:
-                    if targetNode.extLab in self.nodes.keys():
-                        verif.append(True)
-                    else:
-                        verif.append(False)
-                        
-                if all(verif):
-                    if elm.extLab in self.elmts.keys():
-                        print( 'ERROR: trying to add an elem with an existing external label\n'
-                               '       elem not added\n'
-                              f'       elem external label: {elm.extLab}')
-                    else:
-                        self.elmts[elm.extLab]=[elm]
-                        elm.detStiff()
-                else:
-                    print( 'ERROR: trying to add an elem whose defining nodes are not in the structure\n'
-                           '       elem not added\n'
-                          f'       elem external label: {elm.extLab}')
+    def add_elm(self, newElm):
+        if isinstance( newElm, ElmFrame2D):
+            # verify that the elem does not exist yet
+            if any(newElm is oldElm for oldElm in self.elmts):
+                print( 'ERROR: trying to add an elem that already exists in the structure\n'
+                       '       elem not added\n'
+                      f'       elem external label: {newElm.extLab}')
             else:
-                print( 'ERROR: element type not supported\n'
-                      f'       elem external label: {elm.extLab}')
+                # verify that the external label of the elem does not exist yet
+                if newElm.extLab in [oldElm.extLab for oldElm in self.elmts]:
+                    print( 'ERROR: trying to add an elem with an existing external label\n'
+                           '       elem not added\n'
+                          f'       elem external label: {newElm.extLab}')
+                else:
+                    # verify that the nodes defining the elem exist in the structure
+                    if all(  any(newElmNode is struNode  for struNode in self.nodes)   for newElmNode in newElm.nodes):
+                        newElm.intLab=len(self.elmts)
+                        self.elmts.append(newElm)
+                        if self.K_full.mtx.size > 0:
+                            print('WARNING: trying to add an element to a structure\n'
+                                  '         whose global stiffness matrix has already been calculated.\n'
+                                  '         RECALC')
+                    else:
+                        print( 'ERROR: trying to add an elem whose defining nodes are not in the structure\n'
+                               '       elem not added\n'
+                              f'       elem external label: {newElm.extLab}')
+        else:
+            print( 'ERROR: element type not supported\n'
+                  f'       elem external label: {newElm.extLab}')
 
     def create_elm(self, extLab: int, node_labs: list, E: float, A: float, I: float, joints='none'):
         """
@@ -278,12 +283,15 @@ class Struc2D3Dof:
         # and create the list of node objects for ElmFrame2D.__init__()
         verif=[]
         nodes=[]
-        for targetNode in node_labs:
-            if targetNode in self.nodes.keys():
-                verif.append(True)
-                nodes.append( self.nodes[targetNode][0] )
+        for targetLab in node_labs:
+            for posibleNode in self.nodes:
+                if targetLab==posibleNode.extLab:
+                    verif.append(True)
+                    nodes.append( posibleNode )
+                    break
             else:
                 verif.append(False)
+                break
                 
         if all(verif):
             elm=ElmFrame2D(extLab, nodes, E, A, I, joints)
@@ -293,46 +301,69 @@ class Struc2D3Dof:
                    '       elem not added\n'
                   f'       elem external label: {elm.extLab}')
     
+    # def create_BC(self, nodeLab: int, locDof: int, val: float):
+        # # verify that the node does exist
+        # if any(newNode is oldNode for oldNode in self.nodes):
+    
     def eqnums(self):
         # determine an eq. label for each node's DoF
-        for node in self.nodes.values():
+        for node in self.nodes:
             # assign eq. numbers to node's DoFs
             node.dofLab=np.arange( self.ndofn, self.ndofn+3 )
             # constructu dict. for labeling translation
-            for idx, eqLab in enumerate(node.dofLab)
-                self.eqLab[eqLab]=[node idx]
+            for idx, eqLab in enumerate(node.dofLab):
+                self.eqLab[eqLab]=[node, idx]
             # update number of DoFs in problem
             self.ndofn = self.ndofn+3
             
-        # assign eq. labels to elements
+        # initially assign eq. labels to elements
+        # possibly updated at stiffness mtx determination
+        # based on specific info of the element
         for elm in self.elmts:
             for node in elm.nodes:
-                elm.dofLab=np.concatenate((elm.dofLab,targetNode.dofLab),axis=0)
-            # for targetNode in elm.nodes:
-                # for possibleNode in self.nodes.keys():
-                    # if targetNode.extLab==possibleNode:
-                        # elm.dofLab=np.concatenate((elm.dofLab,targetNode.dofLab),axis=0)
-                        # break
-                # else:
-                    # continue
-                # break
+                elm.dofLab=np.concatenate((elm.dofLab,node.dofLab),axis=0)
         
+    def delete_unused_dof(self):
+        '''
+        assumes a symmetric stiffness matrix
+        '''
+        
+        # determine rows and cols to delete
+        # iterate over global sitffness matrix rows
+        it = np.nditer(self.K_full.row, flags=['f_index'])
+        ids2del=[]
+        for row in it:
+            if np.all(self.K_full.mtx[it.index, :] == 0):
+                ids2del.append(it.index)
+        # delete
+        self.K_full.mtx = np.delete(self.K_full.mtx, ids2del, axis=0) # delete rows
+        self.K_full.row = np.delete(self.K_full.row, ids2del, axis=0) # delete rows
+        self.K_full.mtx = np.delete(self.K_full.mtx, ids2del, axis=1) # delete cols
+        self.K_full.col = np.delete(self.K_full.col, ids2del, axis=0) # delete cols
+        # update num of DoF
+        self.ndofn=self.K_full.col.size
+    
     def assemble_K(self):
-        # determine number of eq. per node and their labels 
+        # determine number of eq. per node and their labels
         self.eqnums()
         
         # prepare full matrix for assembling
         mtx = np.zeros((self.ndofn, self.ndofn))
-        dof = np.arange(0, self.ndofn-1)
+        dof = np.arange(0, self.ndofn)
         self.K_full.set_mtx_dof(mtx, row=dof, col=dof)
         
         # assembly
-        for elm in self.elmts: 
+        for elm in self.elmts:
+            # determine stiffness matrix
+            elm.detStiff()
             # iterate over element's DoFs
             it = np.nditer(elm.dofLab, flags=['f_index'])
             # and assemble the element matrix one row at a time
-            for dof in it:
-                self.K_full.mtx[dof,elm.dofLab]=elm.K_glo[it.index,:]
+            for row in it:
+                self.K_full.mtx[row,elm.dofLab]=elm.K_glo[it.index,:]
+                
+        # delete rows and cols associated to DoFs with no stiffness
+        self.delete_unused_dof()
 
     def aplicar_condiciones_frontera(self, condiciones):
         # Modificación de la matriz y vector de cargas según las condiciones de frontera
@@ -351,7 +382,7 @@ if __name__ == '__main__':
         # create structure object
         str=Struc2D3Dof('simple frame')
         
-        # creat node and elem objects and add them to the structure
+        # create node and elem objects and add them to the structure
         if True: # in one step - recomended
             str.create_node(10, np.array([0,0  ], dtype=float))
             str.create_node(20, np.array([0,5.5], dtype=float))
@@ -360,7 +391,7 @@ if __name__ == '__main__':
             
             str.create_elm(1, [10,20], 210e3, 100, 10**4/12)
             str.create_elm(2, [10,40], 210e3, 100, 10**4/12)
-            str.create_elm(3, [20,40], 210e3, 100, 10**4/12, joints='both')
+            str.create_elm(3, [20,40], 210e3, 100, 10**4/12)
             
         else: # in two steps - not recomended
             n1=Node(10, np.array([0,0  ], dtype=float))
@@ -372,15 +403,15 @@ if __name__ == '__main__':
             str.add_node(n3)
             str.add_node(n4)
         
-            elm1=ElmFrame2D(1, [10,20], 210e3, 100, 10**4/12)
-            elm2=ElmFrame2D(2, [10,40], 210e3, 100, 10**4/12)
-            elm3=ElmFrame2D(3, [20,40], 210e3, 100, 10**4/12, joints='both')
+            elm1=ElmFrame2D(1, [n1,n2], 210e3, 100, 10**4/12)
+            elm2=ElmFrame2D(2, [n1,n4], 210e3, 100, 10**4/12)
+            elm3=ElmFrame2D(3, [n2,n4], 210e3, 100, 10**4/12, joints='both')
             str.add_elm(elm1)
             str.add_elm(elm2)
             str.add_elm(elm3)
         
         # assemble global stiffness matrix
-        
+        str.assemble_K()
     
     if False:
         pass
