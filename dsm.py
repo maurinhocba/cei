@@ -16,6 +16,7 @@ COSAS POR IMPLEMENTAR
 # IMPORTING ZONE
 import numpy as np
 from typing import List
+import copy
 # import matplotlib.pyplot as plt
 
 
@@ -193,6 +194,7 @@ class ElmFrame2D:
 class Struc2D3Dof:
     """
     General bidimensional structure with 3 DoF per node
+    under static load system
     """
     
     def __init__(self, name='New Project'):
@@ -200,18 +202,24 @@ class Struc2D3Dof:
         self.desc  = ''
         self.nodes = []         # list of node objects
         self.elmts = []         # list of elem objects
-        self.eqLab = {}         # {eqLab:[node_object local_DoF_0->2]}
+        self.eqLab = {}         # {eqLab:[node_object, local_DoF_0->2]}
         self.ndofn = int(0)
         
-        self.K_full = dpm()
-        self.K_wBCs = dpm()
+        # stiffness matrices
+        self.K_full = dpm()     # assembled global matrix (without BCs)
+        self.K_wBCs = dpm()     # assembled global matrix with BCs
+        self.K_BCLo = dpm()     # columns of K_full associated to (zero and non-zero) BCs (added to load vector)
         self.K_cc   = dpm()
         self.K_hc   = dpm()
         self.K_hh   = dpm()
         self.K_cond = dpm()
         
-        self.BCs   = []         # [ [node_extLab DoF_locLab value] ]
-        self.loads = []         # [ [node_extLab DoF_locLab value] ]
+        # BCs aligned to global coordinate system
+        self.BC_dict = {}                           # dictionary for BCs input {node_object:[local_Dof_label, value]}
+        self.BC_labs = np.array([], dtype=int)      # labels of global DoFs with imposed value
+        self.BC_vals = np.array([], dtype=float)    # values imposed
+        
+        # self.loads = []         # [ [node_extLab DoF_locLab value] ]
 
     def add_node(self, newNode: Node):
         # verify that the node does not exist yet
@@ -301,9 +309,31 @@ class Struc2D3Dof:
                    '       elem not added\n'
                   f'       elem external label: {elm.extLab}')
     
-    # def create_BC(self, nodeLab: int, locDof: int, val: float):
-        # # verify that the node does exist
-        # if any(newNode is oldNode for oldNode in self.nodes):
+    def create_BC(self, nodeLab: int, locDof: int, val: float):
+        """
+        nodeLab: external label of node
+        locDof: local DoF label
+        val: value imposed        
+        """
+        
+        # verify that the node does exist
+        for posibleNode in self.nodes:
+            if nodeLab==posibleNode.extLab:
+                if int in range(0,3):
+                    self.BC_dict[posibleNode] = [locDof, val]   # dictionary for BCs input {node_object:[local_Dof_label, value]}
+                    if self.K_wBCs.mtx.size > 0:
+                        print('WARNING: trying to add a BC to a structure\n'
+                              '         whose BCs has already been imposed.\n'
+                              '         RECALC')
+                    break
+                else:
+                    print( 'ERROR: trying to set a BC on a non-existent local Dof\n'
+                           '       BC not set\n'
+                          f'       target node external label and DoF: {nodeLab}, {locDof}')
+        else:
+            print( 'ERROR: trying to set a BC on a node that is not in the structure\n'
+                   '       BC not set\n'
+                  f'       target node external label: {nodeLab}')
     
     def eqnums(self):
         # determine an eq. label for each node's DoF
@@ -365,9 +395,53 @@ class Struc2D3Dof:
         # delete rows and cols associated to DoFs with no stiffness
         self.delete_unused_dof()
 
-    def aplicar_condiciones_frontera(self, condiciones):
-        # Modificación de la matriz y vector de cargas según las condiciones de frontera
-        pass
+    def impose_BCs(self):
+        
+        if not self.K_full.mtx.size > 0:
+            print( 'ERROR: trying to set BCs to a structure whose stiffness matrix was not assembled\n'
+                   '       BCs not set')
+        else:
+            # PREPARE ARRAYS
+            self.BC_labs = numpy.empty(self.BC_dict.shape(), dtype=int)
+            self.BC_vals = numpy.empty(self.BC_dict.shape(), dtype=float)
+            for idx, (node, locDof_val) in enumerate(self.BC_dict.items()):
+                self.BC_labs[idx] = node.dofLab[ locDof_val[0] ]
+                self.BC_vals[idx] =              locDof_val[1]
+            
+            self.K_wBCs = copy.copy(self.K_full)    # shalow copy - is it necesary to make a deepcopy?
+                
+            # IMPOSE
+            # find the indexes
+            ids2del=[]
+            idsProblem=[]
+            for targetLab in self.BC_labs:
+                if targetLab in self.K_wBCs.row:
+                    idx=np.where(self.K_wBCs.row == targetLab)[0]
+                    ids2del.append(idx)
+                else:
+                    print( 'WARNING: trying to set a BC to a DoF without associated stiffness\n'
+                           '         the row and col for the DoF were eliminated during assembly\n'
+                           '         BC not set\n'
+                          f'         equation internal label: {targetLab}\n'
+                          f'         node external label: {self.eqLab[targetLab][0].extLab}\n'
+                          f'         local DoF label: {self.eqLab[targetLab][1]}')
+                    idx=np.where(self.BC_labs == targetLab)[0]
+                    idsProblem.append(idx)
+            # delete BCs over DoFs without stiffness
+            if len(idsProblem)!=0:
+                self.BC_labs = np.delete(self.BC_labs, idsProblem, axis=0)
+                self.BC_vals = np.delete(self.BC_vals, idsProblem, axis=0)
+            
+            # delete rows
+            self.K_wBCs.mtx = np.delete(self.K_wBCs.mtx, ids2del, axis=0) # delete rows
+            self.K_wBCs.row = np.delete(self.K_wBCs.row, ids2del, axis=0) # delete rows
+            # save cols for loading
+            self.K_BCLo.mtx = copy.copy( self.K_wBCs.mtx[:,self.BC_labs] )
+            self.K_BCLo.row = copy.copy( self.K_wBCs.row )
+            self.K_BCLo.col = copy.copy( self.BC_labs )
+            # delete cols
+            self.K_wBCs.mtx = np.delete(self.K_wBCs.mtx, ids2del, axis=1) # delete cols
+            self.K_wBCs.col = np.delete(self.K_wBCs.col, ids2del, axis=0) # delete cols
 
     def resolver(self):
         # Implementación del solucionador del sistema de ecuaciones
