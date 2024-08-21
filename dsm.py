@@ -11,6 +11,8 @@ COSAS POR IMPLEMENTAR
         # IMPLEMENTAR MÉTODO PARA AGREGAR MUCHOS NODOS Y MUCHOS ELEMENTOS A LA VEZ
         # IMPLEMENTAR MÉTODO PARA ACTUALIZAR COORDENADAS DE UN PUNTO
         # PROBAR SI AL CAMBIAR LAS COORDENADA DE UN NODO, SE ACTUALIZA LA REFERENCIA EN EL ELEMENTO
+        
+        # se puede mejorar la programación creando una función que ensamble cualquier cosa y usando eso múltiples veces
 """
 
 # IMPORTING ZONE
@@ -46,6 +48,29 @@ class Node:
 
     def set_dofVal(self, dofVal: np.array([], dtype=float)):
         self.dofVal = dofVal
+
+
+class dpv:
+    """
+    dynamic property vector
+    has a vector and
+    another vector indicating the numbers of equations to which the rows refer to
+    """
+    
+    def __init__(self):
+        self.vtr = np.array([], dtype=float)
+        self.row = np.array([], dtype=int)      # labels of global DoFs associated to each row of matrix
+        
+    def set_vtr_dof(self, vtr: np.array([], dtype=float),
+                          row: np.array([], dtype=int  )):
+        if vtr.ndim != 1:
+            print('ERROR: trying to set a dynamic property vector with more or less than 1 dimensions.')
+        else:
+            if row.ndim!=1 or row.shape[0]!=vtr.shape[0]:
+                print('ERROR: trying to set a dynamic property vector with a wrong DoF vector.')
+            else:
+                self.vtr = vtr
+                self.row = row
 
 
 class dpm:
@@ -198,6 +223,7 @@ class Struc2D3Dof:
     """
     
     def __init__(self, name='New Project'):
+        # MAIN ATTRIBUTES
         self.name  = name
         self.desc  = ''
         self.nodes = []         # list of node objects
@@ -207,19 +233,25 @@ class Struc2D3Dof:
         
         # stiffness matrices
         self.K_full = dpm()     # assembled global matrix (without BCs)
-        self.K_wBCs = dpm()     # assembled global matrix with BCs
+        self.K_wBCs = dpm()     # assembled global matrix with BCs (rows and cols deleted)
         self.K_BCLo = dpm()     # columns of K_full associated to (zero and non-zero) BCs (added to load vector)
         self.K_cc   = dpm()
         self.K_hc   = dpm()
         self.K_hh   = dpm()
         self.K_cond = dpm()
         
+        # load vectors
+        self.L_full = dpv()     # rel. to K_full - assembled global vector (without BCs)
+        self.L_wBCs = dpv()     # rel. to K_wBCs - rows deleted and K_BCLo*BC_vals added
+        
+        # OTHER ATTRIBUTES
+        # nodal loads (aligned to global coordinate system)
+        self.NL_dict = {}                           # dictionary for NLs input {node_object:[local_Dof_label, value]}
+        
         # BCs aligned to global coordinate system
         self.BC_dict = {}                           # dictionary for BCs input {node_object:[local_Dof_label, value]}
         self.BC_labs = np.array([], dtype=int)      # labels of global DoFs with imposed value
         self.BC_vals = np.array([], dtype=float)    # values imposed
-        
-        # self.loads = []         # [ [node_extLab DoF_locLab value] ]
 
     def add_node(self, newNode: Node):
         # verify that the node does not exist yet
@@ -309,6 +341,33 @@ class Struc2D3Dof:
                    '       elem not added\n'
                   f'       elem external label: {elm.extLab}')
     
+    def create_NL(self, nodeLab: int, locDof: int, val: float):
+        """
+        nodeLab: external label of node
+        locDof: local DoF label
+        val: load value
+        """
+        
+        # verify that the node does exist
+        for posibleNode in self.nodes:
+            if nodeLab==posibleNode.extLab:
+                # verify if the DoF is correct
+                if int in range(0,3):
+                    self.NL_dict[posibleNode] = [locDof, val]   # dictionary for NLs input {node_object:[local_Dof_label, value]}
+                    if self.K_wBCs.mtx.size > 0:
+                        print('WARNING: trying to add a nodal load to a structure\n'
+                              '         whose BCs has already been imposed.\n'
+                              '         RECALC')
+                    break
+                else:
+                    print( 'ERROR: trying to set a nodal load on a non-existent local Dof\n'
+                           '       nodal load not set\n'
+                          f'       target node external label and DoF: {nodeLab}, {locDof}')
+        else:
+            print( 'ERROR: trying to set a nodal load on a node that is not in the structure\n'
+                   '       nodal load not set\n'
+                  f'       target node external label: {nodeLab}')
+    
     def create_BC(self, nodeLab: int, locDof: int, val: float):
         """
         nodeLab: external label of node
@@ -319,6 +378,7 @@ class Struc2D3Dof:
         # verify that the node does exist
         for posibleNode in self.nodes:
             if nodeLab==posibleNode.extLab:
+                # verify if the DoF is correct
                 if int in range(0,3):
                     self.BC_dict[posibleNode] = [locDof, val]   # dictionary for BCs input {node_object:[local_Dof_label, value]}
                     if self.K_wBCs.mtx.size > 0:
@@ -358,31 +418,44 @@ class Struc2D3Dof:
         assumes a symmetric stiffness matrix
         '''
         
-        # determine rows and cols to delete
+        # DETERMINE ROWS AND COLS TO DELETE
         # iterate over global sitffness matrix rows
         it = np.nditer(self.K_full.row, flags=['f_index'])
         ids2del=[]
         for row in it:
             if np.all(self.K_full.mtx[it.index, :] == 0):
                 ids2del.append(it.index)
-        # delete
+                
+        # DELETE
+        # stiffness matrix
         self.K_full.mtx = np.delete(self.K_full.mtx, ids2del, axis=0) # delete rows
         self.K_full.row = np.delete(self.K_full.row, ids2del, axis=0) # delete rows
         self.K_full.mtx = np.delete(self.K_full.mtx, ids2del, axis=1) # delete cols
         self.K_full.col = np.delete(self.K_full.col, ids2del, axis=0) # delete cols
-        # update num of DoF
+        # load vector
+        self.L_full.vtr = np.delete(self.L_full.vtr, ids2del, axis=0) # delete rows
+        self.L_full.row = np.delete(self.L_full.row, ids2del, axis=0) # delete rows
+        # BCs
+        
+        
+        # UPDATE NUM OF DOF
         self.ndofn=self.K_full.col.size
     
     def assemble_K(self):
         # determine number of eq. per node and their labels
         self.eqnums()
         
-        # prepare full matrix for assembling
-        mtx = np.zeros((self.ndofn, self.ndofn))
+        # INITIALIZE
         dof = np.arange(0, self.ndofn)
+        # stiffness matrix
+        mtx = np.zeros((self.ndofn, self.ndofn))
         self.K_full.set_mtx_dof(mtx, row=dof, col=dof)
+        # load vector
+        vtr = np.zeros((self.ndofn, 1))
+        self.L_full.set_vtr_dof(vtr, row=dof)
         
-        # assembly
+        # ASSEMBLY
+        # stiffness matrix
         for elm in self.elmts:
             # determine stiffness matrix
             elm.detStiff()
@@ -391,8 +464,14 @@ class Struc2D3Dof:
             # and assemble the element matrix one row at a time
             for row in it:
                 self.K_full.mtx[row,elm.dofLab]=elm.K_glo[it.index,:]
-                
-        # delete rows and cols associated to DoFs with no stiffness
+        # load vector
+        for node, locDof_val in self.NL_dict.items():
+            locDof = locDof_val[0]
+            val    = locDof_val[1]
+            idx = node.dofLab[ locDof ]
+            self.L_full[idx] += val
+        
+        # DELETE rows and cols associated to DoFs with no stiffness
         self.delete_unused_dof()
 
     def impose_BCs(self):
