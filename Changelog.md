@@ -4,3 +4,4 @@
 ### Added
 - First version with basic functionalities.
 - Intended to model 2D framed structures with nodal loads.
+- One simple example showing basic use.
