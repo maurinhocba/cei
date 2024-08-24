@@ -37,14 +37,10 @@ class Node:
         self.intLab = int(0)                        # internal label, assigned when added to struct
         self.dofLab = np.array([], dtype=int)       # global DoFs' labels, assigned befor assembly
         self.dofVal = np.array([], dtype=float)     # actual value of DoFs
-        self.loads  = {}                            # dict {DOF: load}
 
     def add_dofs(self, dofLab: np.array([], dtype=int)):
         self.dofLab = dofLab
         self.dofVal = np.zeros( self.dofLab.shape )
-
-    def add_load(self, dof: int, load: Load):
-        self.loads[dof] = load
 
     def set_dofVal(self, dofVal: np.array([], dtype=float)):
         self.dofVal = dofVal
@@ -125,9 +121,14 @@ class ElmFrame2D:
         self.dofpn  = ''                        # string - DoFs per node
         self.L      = float(0)                  # length
         self.t      = np.array([], dtype=float) # unit vector
+        self.R      = np.array([], dtype=float) # rotation matrix: U_glo = R * U_loc
         self.K_loc  = np.array([], dtype=float) # stiffness matrix in local  coordinates
         self.K_glo  = np.array([], dtype=float) # stiffness matrix in global coordinates
-        self.dofLab = np.array([], dtype=int)   # DoFs' labels, assigned on assembly
+        self.dofLab = np.array([], dtype=int)   # global DoFs' labels, assigned on assembly
+        self.U_loc  = np.array([], dtype=float) # displacements of elem ends in local coordinates
+        self.U_glo  = np.array([], dtype=float) # displacements of elem ends in global coordinates
+        self.L_loc  = np.array([], dtype=float) # external loads on elem ends in local coordinates
+        self.L_glo  = np.array([], dtype=float) # external loads on elem ends in global coordinates
     
     def dofPerNode(self):
         if self.joints=='none':
@@ -186,6 +187,9 @@ class ElmFrame2D:
         if self.joints=='none':
             # Stiffness matrix for displacements vector of the form:
             # U_ij = [  u_i^x  u_i^y  phi_i^z  |  u_j^x  u_j^y  phi_j^z  ]^T
+            if not local:
+                self.dofLab = np.block( [ self.nodes[0].dofLab[:] , self.nodes[1].dofLab[:] ] )
+            
             K = np.array( [ [ A,  B, -C,     -A, -B, -C   , ],
                             [ B,  D,  E,     -B, -D,  E   , ],
                             [-C,  E, k3,      C, -E,  k3/2, ],
@@ -202,18 +206,34 @@ class ElmFrame2D:
     
     def detStiff(self):
         self.length_and_uVectr()
-        self.K_loc  = self.stiffM(local=True )     # stiffness matrix in local  coordinates
-        self.K_glo  = self.stiffM(local=False)     # stiffness matrix in global coordinates
-            
-    """def set_DoF_labels(self):
-        if joints=='none':
-            # Stiffness matrix for displacements vector of the form:
-            # U_ij = [  u_i^x  u_i^y  phi_i^z  |  u_j^x  u_j^y  phi_j^z  ]^T
-            self.dofLab = np.block( [ self.nodes[0].dofLab(:) ]  ;  [ self.nodes[1].dofLab(:) ] )
+        self.K_loc = self.stiffM(local=True )     # stiffness matrix in local  coordinates
+        self.K_glo = self.stiffM(local=False)     # stiffness matrix in global coordinates
+    
+    def detR(self):
+        """
+        Rotation matrix for a 6-element vector
+            > U_glo = R * U_loc
+            > L_glo = R * L_loc
+        """
         
-        else:
-            print('ERROR: beams with joints not implemented yet - stiffness matrix determination of beam no. '+self.extLab)
-    """
+        g1=self.t[0]
+        g2=self.t[1]
+        r = np.array( [ [ g1, -g2, 0 ] ,
+                        [ g2,  g1, 0 ] ,
+                        [  0,   0, 1 ] ])
+        o = np.zeros_like(r)
+        self.R = np.block( [ [ r, o ] ,
+                             [ o, r ] ])
+        
+    def elmSolve( self, U_glo):
+        # global coordinates
+        self.U_glo = U_glo
+        self.L_glo = np.matmul( self.K_glo, self.U_glo )
+        
+        # local coords.
+        self.detR()
+        self.U_loc = np.matmul( np.transpose(self.R), self.U_glo )
+        self.L_loc = np.matmul( np.transpose(self.R), self.L_glo )
     
 
 class Struc2D3Dof:
@@ -230,6 +250,7 @@ class Struc2D3Dof:
         self.elmts = []         # list of elem objects
         self.eqLab = {}         # {eqLab:[node_object, local_DoF_0->2]}
         self.ndofn = int(0)
+        self.spDof = []         # suppressed DoFs without stiffness associated
         
         # stiffness matrices
         self.K_full = dpm()     # assembled global matrix (without BCs)
@@ -241,15 +262,20 @@ class Struc2D3Dof:
         self.K_cond = dpm()
         
         # load vectors
+        self.reacts = dpv()     # rel. to K_full - reactions: K_full * U_full = L_full + reacts
         self.L_full = dpv()     # rel. to K_full - assembled global vector (without BCs)
         self.L_wBCs = dpv()     # rel. to K_wBCs - rows deleted and K_BCLo*BC_vals added
         
+        # displacements vectors
+        self.U_full = dpv()     # rel. to K_full
+        self.U_wBCs = dpv()     # rel. to K_wBCs
+        
         # OTHER ATTRIBUTES
         # nodal loads (aligned to global coordinate system)
-        self.NL_dict = {}                           # dictionary for NLs input {node_object:[local_Dof_label, value]}
+        self.NL_dict = {}                           # dictionary for NLs input {internal_label:[node_object local_Dof_label, value]}
         
         # BCs aligned to global coordinate system
-        self.BC_dict = {}                           # dictionary for BCs input {node_object:[local_Dof_label, value]}
+        self.BC_dict = {}                           # dictionary for BCs input {internal_label:[node_object local_Dof_label, value]}
         self.BC_labs = np.array([], dtype=int)      # labels of global DoFs with imposed value
         self.BC_vals = np.array([], dtype=float)    # values imposed
 
@@ -352,8 +378,8 @@ class Struc2D3Dof:
         for posibleNode in self.nodes:
             if nodeLab==posibleNode.extLab:
                 # verify if the DoF is correct
-                if int in range(0,3):
-                    self.NL_dict[posibleNode] = [locDof, val]   # dictionary for NLs input {node_object:[local_Dof_label, value]}
+                if locDof in range(0,3):
+                    self.NL_dict[len(self.NL_dict)] = [posibleNode, locDof, val]   # dictionary for NLs input {internal_label:[node_object local_Dof_label, value]}
                     if self.K_wBCs.mtx.size > 0:
                         print('WARNING: trying to add a nodal load to a structure\n'
                               '         whose BCs has already been imposed.\n'
@@ -379,8 +405,8 @@ class Struc2D3Dof:
         for posibleNode in self.nodes:
             if nodeLab==posibleNode.extLab:
                 # verify if the DoF is correct
-                if int in range(0,3):
-                    self.BC_dict[posibleNode] = [locDof, val]   # dictionary for BCs input {node_object:[local_Dof_label, value]}
+                if locDof in range(0,3):
+                    self.BC_dict[len(self.BC_dict)] = [posibleNode, locDof, val]   # dictionary for BCs input {internal_label:[node_object local_Dof_label, value]}
                     if self.K_wBCs.mtx.size > 0:
                         print('WARNING: trying to add a BC to a structure\n'
                               '         whose BCs has already been imposed.\n'
@@ -425,7 +451,8 @@ class Struc2D3Dof:
         for row in it:
             if np.all(self.K_full.mtx[it.index, :] == 0):
                 ids2del.append(it.index)
-                
+        self.spDof=self.K_full.row[ids2del].tolist()
+        
         # DELETE
         # stiffness matrix
         self.K_full.mtx = np.delete(self.K_full.mtx, ids2del, axis=0) # delete rows
@@ -435,13 +462,25 @@ class Struc2D3Dof:
         # load vector
         self.L_full.vtr = np.delete(self.L_full.vtr, ids2del, axis=0) # delete rows
         self.L_full.row = np.delete(self.L_full.row, ids2del, axis=0) # delete rows
-        # BCs
-        
+        # disp. vector
+        self.U_full.vtr = np.delete(self.U_full.vtr, ids2del, axis=0) # delete rows
+        self.U_full.row = np.delete(self.U_full.row, ids2del, axis=0) # delete rows
+        # boundary conditions
+        #   find BCs to delete
+        keys2del=[]
+        for bcLab, node_locDof_val in self.BC_dict.items():
+            node=node_locDof_val[0]
+            locDof=node_locDof_val[1]
+            if node.dofLab[ locDof ] in self.spDof:
+                keys2del.append(bcLab)
+        #   delete
+        for key in keys2del:
+            del self.BC_dict[key]
         
         # UPDATE NUM OF DOF
         self.ndofn=self.K_full.col.size
     
-    def assemble_K(self):
+    def assemble(self):
         # determine number of eq. per node and their labels
         self.eqnums()
         
@@ -451,8 +490,11 @@ class Struc2D3Dof:
         mtx = np.zeros((self.ndofn, self.ndofn))
         self.K_full.set_mtx_dof(mtx, row=dof, col=dof)
         # load vector
-        vtr = np.zeros((self.ndofn, 1))
+        vtr = np.zeros((self.ndofn))
         self.L_full.set_vtr_dof(vtr, row=dof)
+        self.reacts.set_vtr_dof(vtr, row=dof)
+        # disp. vector
+        self.U_full.set_vtr_dof(vtr, row=dof)
         
         # ASSEMBLY
         # stiffness matrix
@@ -465,11 +507,12 @@ class Struc2D3Dof:
             for row in it:
                 self.K_full.mtx[row,elm.dofLab]=elm.K_glo[it.index,:]
         # load vector
-        for node, locDof_val in self.NL_dict.items():
-            locDof = locDof_val[0]
-            val    = locDof_val[1]
+        for node_locDof_val in self.NL_dict.values():
+            node   = node_locDof_val[0]
+            locDof = node_locDof_val[1]
+            val    = node_locDof_val[2]
             idx = node.dofLab[ locDof ]
-            self.L_full[idx] += val
+            self.L_full.vtr[idx] += val
         
         # DELETE rows and cols associated to DoFs with no stiffness
         self.delete_unused_dof()
@@ -481,57 +524,73 @@ class Struc2D3Dof:
                    '       BCs not set')
         else:
             # PREPARE ARRAYS
-            self.BC_labs = numpy.empty(self.BC_dict.shape(), dtype=int)
-            self.BC_vals = numpy.empty(self.BC_dict.shape(), dtype=float)
-            for idx, (node, locDof_val) in enumerate(self.BC_dict.items()):
-                self.BC_labs[idx] = node.dofLab[ locDof_val[0] ]
-                self.BC_vals[idx] =              locDof_val[1]
+            self.BC_labs = np.empty(len(self.BC_dict), dtype=int)
+            self.BC_vals = np.empty(len(self.BC_dict), dtype=float)
+            for idx, (bcLab, node_locDof_val) in enumerate(self.BC_dict.items()):
+                node  =node_locDof_val[0]
+                locDof=node_locDof_val[1]
+                val   =node_locDof_val[2]
+                self.BC_labs[idx] = node.dofLab[ locDof ]
+                self.BC_vals[idx] = val
             
-            self.K_wBCs = copy.copy(self.K_full)    # shalow copy - is it necesary to make a deepcopy?
+            self.K_wBCs = copy.deepcopy(self.K_full)
+            self.L_wBCs = copy.deepcopy(self.L_full)
+            self.U_wBCs = copy.deepcopy(self.U_full)
                 
             # IMPOSE
             # find the indexes
             ids2del=[]
-            idsProblem=[]
             for targetLab in self.BC_labs:
-                if targetLab in self.K_wBCs.row:
-                    idx=np.where(self.K_wBCs.row == targetLab)[0]
-                    ids2del.append(idx)
-                else:
-                    print( 'WARNING: trying to set a BC to a DoF without associated stiffness\n'
-                           '         the row and col for the DoF were eliminated during assembly\n'
-                           '         BC not set\n'
-                          f'         equation internal label: {targetLab}\n'
-                          f'         node external label: {self.eqLab[targetLab][0].extLab}\n'
-                          f'         local DoF label: {self.eqLab[targetLab][1]}')
-                    idx=np.where(self.BC_labs == targetLab)[0]
-                    idsProblem.append(idx)
-            # delete BCs over DoFs without stiffness
-            if len(idsProblem)!=0:
-                self.BC_labs = np.delete(self.BC_labs, idsProblem, axis=0)
-                self.BC_vals = np.delete(self.BC_vals, idsProblem, axis=0)
+                idx=np.where(self.K_wBCs.row == targetLab)[0][0]
+                ids2del.append(idx)
             
+            # stiffness matrix
             # delete rows
             self.K_wBCs.mtx = np.delete(self.K_wBCs.mtx, ids2del, axis=0) # delete rows
             self.K_wBCs.row = np.delete(self.K_wBCs.row, ids2del, axis=0) # delete rows
             # save cols for loading
-            self.K_BCLo.mtx = copy.copy( self.K_wBCs.mtx[:,self.BC_labs] )
+            self.K_BCLo.mtx = copy.copy( self.K_wBCs.mtx[:,ids2del] )
             self.K_BCLo.row = copy.copy( self.K_wBCs.row )
             self.K_BCLo.col = copy.copy( self.BC_labs )
             # delete cols
             self.K_wBCs.mtx = np.delete(self.K_wBCs.mtx, ids2del, axis=1) # delete cols
             self.K_wBCs.col = np.delete(self.K_wBCs.col, ids2del, axis=0) # delete cols
+            
+            # load vector
+            self.L_wBCs.vtr = np.delete(self.L_wBCs.vtr, ids2del, axis=0) # delete rows
+            self.L_wBCs.row = np.delete(self.L_wBCs.row, ids2del, axis=0) # delete rows
+            self.L_wBCs.vtr += np.matmul( self.K_BCLo.mtx, self.BC_vals)
+            
+            # disp. vector
+            self.U_wBCs.vtr = np.delete(self.U_wBCs.vtr, ids2del, axis=0) # delete rows
+            self.U_wBCs.row = np.delete(self.U_wBCs.row, ids2del, axis=0) # delete rows
+            self.U_full.vtr[ids2del]=self.BC_vals[:] # this works because ids2del is determined here, some rows above
 
-    def resolver(self):
-        # Implementación del solucionador del sistema de ecuaciones
-        pass
+    def solve(self):
+        # UNKNOWN DISP.
+        self.U_wBCs.vtr = np.linalg.solve(self.K_wBCs.mtx, self.L_wBCs.vtr)
+        ids = [np.where(self.U_full.row == dofLab)[0][0] for dofLab in self.U_wBCs.row]
+        self.U_full.vtr[ids]=self.U_wBCs.vtr[:]
+        
+        # REACTIONS
+        self.reacts.vtr = np.matmul( self.K_full.mtx, self.U_full.vtr) - self.L_full.vtr
+        
+        # ELEMENTS
+        for elm in self.elmts:
+            # print(elm.extLab)
+            elemU = np.zeros( elm.K_glo.shape[1], dtype=float)
+            for locIdx, dofLab in enumerate(elm.dofLab):
+                if dofLab in self.U_full.row:
+                    gloIdx = np.where(self.U_full.row == dofLab)[0][0]
+                    elemU[locIdx]=self.U_full.vtr[gloIdx]
+            elm.elmSolve(elemU)
 
 
 # RUN
 if __name__ == '__main__':
     
     # simple structure
-    if True:
+    if False:
         # create structure object
         str=Struc2D3Dof('simple frame')
         
@@ -566,8 +625,46 @@ if __name__ == '__main__':
         # assemble global stiffness matrix
         str.assemble_K()
     
-    if False:
-        pass
+    # D:\Academico\Calculo Estructural I\clases ... \10-MdR-Porticos-ej._introd_(coords._locales)
+    if True:
+        # creat problem
+        str=Struc2D3Dof('simple frame')
+        
+        # nodes
+        str.create_node(1, np.array([ 0,0], dtype=float))
+        str.create_node(2, np.array([10,0], dtype=float))
+        str.create_node(3, np.array([20,0], dtype=float))
+        str.create_node(4, np.array([20,1], dtype=float)) # for the spring
+        
+        # elms
+        E=1.5e3
+        A=4.0
+        I=1.33
+        str.create_elm(1, [1,2],  E, A, I)
+        str.create_elm(2, [2,3],  E, A, I)
+        str.create_elm(3, [3,4], 16, 1, 0) # spring
+        
+        # loads
+        str.create_NL(3, 1, 40)
+        
+        # BCs
+        str.create_BC(1, 0, 0)
+        str.create_BC(1, 1, 0)
+        str.create_BC(1, 2, 0)
+        str.create_BC(2, 0, 0)
+        str.create_BC(2, 1, 0)
+        str.create_BC(3, 0, 0)
+        str.create_BC(3, 2, 0)
+        str.create_BC(4, 0, 0)
+        str.create_BC(4, 1, 0)
+        
+        # solve
+        str.assemble()
+        str.impose_BCs()
+        str.solve()
+        
+        # print
+        print( str.reacts.vtr )
     
     
     
