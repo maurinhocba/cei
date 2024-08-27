@@ -234,7 +234,20 @@ class ElmFrame2D:
         self.detR()
         self.U_loc = np.matmul( np.transpose(self.R), self.U_glo )
         self.L_loc = np.matmul( np.transpose(self.R), self.L_glo )
-    
+        
+    def getL( self, nodeLocLab: int, locDof: int, local=True ):
+        """
+        retrieve elemental nodal load (in local or global coordinates)
+        nodeLocLab runs from 0 to nnode-1
+        locDof runs from 0 to nDof-1
+        """
+        idx=3*nodeLocLab+locDof
+        if local:
+            L=self.L_loc[idx]
+        else:
+            L=self.L_glo[idx]
+        return L
+        
 
 class Struc2D3Dof:
     """
@@ -381,6 +394,31 @@ class Struc2D3Dof:
             print( 'ERROR: trying to add an elem whose defining nodes are not in the structure\n'
                    '       elem not added\n'
                   f'       elem external label: {elm.extLab}')
+                  
+    def findElmts( self, elms_labs: List[int] ):
+        """
+        find element objects from external label
+        """
+        
+        # check that there are no repetitions in the list
+        if len(elms_labs) != len(set(elms_labs)) :
+            print( 'WARNING: elems external labels repeated in list for findElmts()\n'
+                  f'         elems external labels: {elms_labs}')
+        
+        elemObjectsList=[]
+        for targetLab in elms_labs:
+            # check if the node exists - try-except clause???
+            if any(   targetLab==possibleElem.extLab   for possibleElem in self.elmts):
+                # find the node
+                for possibleElem in self.elmts:
+                    if targetLab==possibleElem.extLab:
+                        elemObjectsList.append(possibleElem)
+                        break
+            else:
+                print( 'ERROR: trying to find an elem that is not in the structure\n'
+                      f'       elem external label: {targetLab}')
+        
+        return elemObjectsList
     
     def create_NL(self, nodeLab: int, locDof: int, val: float):
         """
@@ -661,6 +699,24 @@ class Struc2D3Dof:
         """
         R = self.getR( nodeExtLab, locDof-1 )
         return R
+                  
+    def ask4elem( self, elemExtLab: int ):
+        """
+        retrieve element object with specific external label
+        """
+        elmList = self.findElmts( [elemExtLab] )
+        return elmList[0]
+                  
+    def ask4ENL( self, elemExtLab: int, nodeLocLab: int, locDof: int, local=True ):
+        """
+        retrieve elemental nodal load (in local or global coordinates)
+        nodeLocLab runs from 1 to nnode (engineering labeling)
+        locDof runs from 1 to nDof (engineering labeling)
+        """
+        elmList = self.findElmts( [elemExtLab] )
+        elm=elmList[0]
+        ENL=elm.getL( nodeLocLab-1, locDof-1, local )
+        return ENL
 
 
 # RUN
@@ -690,25 +746,25 @@ if __name__ == '__main__':
         str=Struc2D3Dof('simple frame')
 
         # nodes
-        str.create_node(1, np.array([ 0*feet2mm, 20*feet2mm], dtype=float))
-        str.create_node(2, np.array([20*feet2mm, 20*feet2mm], dtype=float))
-        str.create_node(3, np.array([20*feet2mm,  0*feet2mm], dtype=float))
+        str.create_node(extLab=1, coords=np.array([ 0*feet2mm, 20*feet2mm], dtype=float))
+        str.create_node(extLab=2, coords=np.array([20*feet2mm, 20*feet2mm], dtype=float))
+        str.create_node(extLab=3, coords=np.array([20*feet2mm,  0*feet2mm], dtype=float))
 
         # elms
         E=29e3*ksi2MPa
         A=10*in22mm2
         I=500*in42mm4
-        str.create_elm(1, [1,2],  E, A, I)
-        str.create_elm(2, [2,3],  E, A, I)
+        str.create_elm(extLab=1, node_labs=[1,2], E=E, A=A, I=I, joints='none')
+        str.create_elm(extLab=2, node_labs=[2,3], E=E, A=A, I=I, joints='none')
 
         # loads
-        str.create_NL(2, 1, 5*kip2N)
+        str.create_NL(nodeLab=2, locDof=1, val=5*kip2N)
 
         # BCs
-        str.create_BC(1, 2, 0) # node 1 - pinned (vertical)
-        str.create_BC(3, 1, 0) # node 3 - fixed
-        str.create_BC(3, 2, 0) # node 3 - fixed
-        str.create_BC(3, 3, 0) # node 3 - fixed
+        str.create_BC(nodeLab=1, locDof=2, val=0) # node 1 - pinned (vertical)
+        str.create_BC(nodeLab=3, locDof=1, val=0) # node 3 - fixed
+        str.create_BC(nodeLab=3, locDof=2, val=0) # node 3 - fixed
+        str.create_BC(nodeLab=3, locDof=3, val=0) # node 3 - fixed
 
         # solve
         str.assemble()
@@ -731,19 +787,19 @@ if __name__ == '__main__':
         print( '')
         print( 'Elemental nodal loads in global coordinates:')
         print( 'element #1')
-        print(f'> elem 1, node i, L_xg = {str.elmts[0].L_glo[0]/kip2N      :8.2f} kip')
-        print(f'> elem 1, node i, L_yg = {str.elmts[0].L_glo[1]/kip2N      :8.2f} kip')
-        print(f'> elem 1, node i, mome = {str.elmts[0].L_glo[2]/kip2N*mm2in:8.2f} kip*in')
-        print(f'> elem 1, node j, L_xg = {str.elmts[0].L_glo[3]/kip2N      :8.2f} kip')
-        print(f'> elem 1, node j, L_yg = {str.elmts[0].L_glo[4]/kip2N      :8.2f} kip')
-        print(f'> elem 1, node j, mome = {str.elmts[0].L_glo[5]/kip2N*mm2in:8.2f} kip*in')
+        print(f'> elem 1, node i, L_xg = {str.ask4ENL( elemExtLab=1, nodeLocLab=1, locDof=1, local=False )/kip2N      :8.2f} kip')
+        print(f'> elem 1, node i, L_yg = {str.ask4ENL( elemExtLab=1, nodeLocLab=1, locDof=2, local=False )/kip2N      :8.2f} kip')
+        print(f'> elem 1, node i, mome = {str.ask4ENL( elemExtLab=1, nodeLocLab=1, locDof=3, local=False )/kip2N*mm2in:8.2f} kip*in')
+        print(f'> elem 1, node j, L_xg = {str.ask4ENL( elemExtLab=1, nodeLocLab=2, locDof=1, local=False )/kip2N      :8.2f} kip')
+        print(f'> elem 1, node j, L_yg = {str.ask4ENL( elemExtLab=1, nodeLocLab=2, locDof=2, local=False )/kip2N      :8.2f} kip')
+        print(f'> elem 1, node j, mome = {str.ask4ENL( elemExtLab=1, nodeLocLab=2, locDof=3, local=False )/kip2N*mm2in:8.2f} kip*in')
         print( 'element #2')
-        print(f'> elem 2, node i, L_xg = {str.elmts[1].L_glo[0]/kip2N      :8.2f} kip')
-        print(f'> elem 2, node i, L_yg = {str.elmts[1].L_glo[1]/kip2N      :8.2f} kip')
-        print(f'> elem 2, node i, mome = {str.elmts[1].L_glo[2]/kip2N*mm2in:8.2f} kip*in')
-        print(f'> elem 2, node j, L_xg = {str.elmts[1].L_glo[3]/kip2N      :8.2f} kip')
-        print(f'> elem 2, node j, L_yg = {str.elmts[1].L_glo[4]/kip2N      :8.2f} kip')
-        print(f'> elem 2, node j, mome = {str.elmts[1].L_glo[5]/kip2N*mm2in:8.2f} kip*in')
+        print(f'> elem 2, node i, L_xg = {str.ask4ENL( elemExtLab=2, nodeLocLab=1, locDof=1, local=False )/kip2N      :8.2f} kip')
+        print(f'> elem 2, node i, L_yg = {str.ask4ENL( elemExtLab=2, nodeLocLab=1, locDof=2, local=False )/kip2N      :8.2f} kip')
+        print(f'> elem 2, node i, mome = {str.ask4ENL( elemExtLab=2, nodeLocLab=1, locDof=3, local=False )/kip2N*mm2in:8.2f} kip*in')
+        print(f'> elem 2, node j, L_xg = {str.ask4ENL( elemExtLab=2, nodeLocLab=2, locDof=1, local=False )/kip2N      :8.2f} kip')
+        print(f'> elem 2, node j, L_yg = {str.ask4ENL( elemExtLab=2, nodeLocLab=2, locDof=2, local=False )/kip2N      :8.2f} kip')
+        print(f'> elem 2, node j, mome = {str.ask4ENL( elemExtLab=2, nodeLocLab=2, locDof=3, local=False )/kip2N*mm2in:8.2f} kip*in')
         
     
     # simple structure
