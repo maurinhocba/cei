@@ -248,7 +248,8 @@ class Struc2D3Dof:
         self.desc  = ''
         self.nodes = []         # list of node objects
         self.elmts = []         # list of elem objects
-        self.eqLab = {}         # {eqLab:[node_object, local_DoF_0->2]}
+        self.eqLab = {}         # translation from global DoF (eqLab) to node and local DoF {eqLab:[node_object, local_DoF_0->2]}
+                                # the inverse is done with method self.getEqLab()
         self.ndofn = int(0)
         self.spDof = []         # suppressed DoFs without stiffness associated
         
@@ -309,21 +310,46 @@ class Struc2D3Dof:
         node=Node(extLab, coords)
         self.add_node(node)
     
+    def findNodes( self, node_labs: List[int] ):
+        """
+        find node objects from external label
+        """
+        
+        # check that there are no repetitions in the list
+        if len(node_labs) != len(set(node_labs)) :
+            print( 'WARNING: node external labels repeated in list for findNodes()\n'
+                  f'         nodes external labels: {node_labs}')
+        
+        nodeObjectsList=[]
+        for targetLab in node_labs:
+            # check if the node exists - try-except clause???
+            if any(   targetLab==possibleNode.extLab   for possibleNode in self.nodes):
+                # find the node
+                for possibleNode in self.nodes:
+                    if targetLab==possibleNode.extLab:
+                        nodeObjectsList.append(possibleNode)
+                        break
+            else:
+                print( 'ERROR: trying to find a node that is not in the structure\n'
+                      f'       node external label: {targetLab}')
+        
+        return nodeObjectsList
+    
     def add_elm(self, newElm):
         if isinstance( newElm, ElmFrame2D):
-            # verify that the elem does not exist yet
+            # check that the elem does not exist yet
             if any(newElm is oldElm for oldElm in self.elmts):
                 print( 'ERROR: trying to add an elem that already exists in the structure\n'
                        '       elem not added\n'
                       f'       elem external label: {newElm.extLab}')
             else:
-                # verify that the external label of the elem does not exist yet
+                # check that the external label of the elem does not exist yet
                 if newElm.extLab in [oldElm.extLab for oldElm in self.elmts]:
                     print( 'ERROR: trying to add an elem with an existing external label\n'
                            '       elem not added\n'
                           f'       elem external label: {newElm.extLab}')
                 else:
-                    # verify that the nodes defining the elem exist in the structure
+                    # check that the nodes defining the elem exist in the structure
                     if all(  any(newElmNode is struNode  for struNode in self.nodes)   for newElmNode in newElm.nodes):
                         newElm.intLab=len(self.elmts)
                         self.elmts.append(newElm)
@@ -339,28 +365,17 @@ class Struc2D3Dof:
             print( 'ERROR: element type not supported\n'
                   f'       elem external label: {newElm.extLab}')
 
-    def create_elm(self, extLab: int, node_labs: list, E: float, A: float, I: float, joints='none'):
+    def create_elm(self, extLab: int, node_labs: List[int], E: float, A: float, I: float, joints='none'):
         """
         arg "node_labs" here is a list of external labels of nodes
         which is different from arg "nodes" in ElmFrame2D.__init__() method
         """
         
-        # verify that the nodes defining the elem exist in the structure
-        # and create the list of node objects for ElmFrame2D.__init__()
-        verif=[]
-        nodes=[]
-        for targetLab in node_labs:
-            for posibleNode in self.nodes:
-                if targetLab==posibleNode.extLab:
-                    verif.append(True)
-                    nodes.append( posibleNode )
-                    break
-            else:
-                verif.append(False)
-                break
-                
-        if all(verif):
-            elm=ElmFrame2D(extLab, nodes, E, A, I, joints)
+        # create the list of node objects for ElmFrame2D.__init__()
+        nodeObjectsList = self.findNodes(node_labs)
+        # check that all the nodes defining the elem exist in the structure
+        if len(node_labs)==len(nodeObjectsList):
+            elm=ElmFrame2D(extLab, nodeObjectsList, E, A, I, joints)
             self.add_elm(elm)
         else:
             print( 'ERROR: trying to add an elem whose defining nodes are not in the structure\n'
@@ -371,24 +386,28 @@ class Struc2D3Dof:
         """
         nodeLab: external label of node
         locDof: local DoF label
+                runs from 1 to nDof (engineering labeling)
         val: load value
         """
         
-        # verify that the node does exist
-        for posibleNode in self.nodes:
-            if nodeLab==posibleNode.extLab:
-                # verify if the DoF is correct
-                if locDof in range(0,3):
-                    self.NL_dict[len(self.NL_dict)] = [posibleNode, locDof, val]   # dictionary for NLs input {internal_label:[node_object local_Dof_label, value]}
-                    if self.K_wBCs.mtx.size > 0:
-                        print('WARNING: trying to add a nodal load to a structure\n'
-                              '         whose BCs has already been imposed.\n'
-                              '         RECALC')
-                    break
-                else:
-                    print( 'ERROR: trying to set a nodal load on a non-existent local Dof\n'
-                           '       nodal load not set\n'
-                          f'       target node external label and DoF: {nodeLab}, {locDof}')
+        # find the node
+        nodeObjectsList = self.findNodes([nodeLab])
+        # check that the node does exist
+        if len(nodeObjectsList)==1:
+            node=nodeObjectsList[0]
+            locDof -= 1
+            # check if the DoF is correct
+            # try-except clause should check if locDof exists and inform
+            if locDof in range(0,3):
+                self.NL_dict[len(self.NL_dict)] = [node, locDof, val]   # dictionary for NLs input {internal_label:[node_object local_Dof_label, value]}
+                if self.K_wBCs.mtx.size > 0:
+                    print('WARNING: trying to add a nodal load to a structure\n'
+                          '         whose BCs has already been imposed.\n'
+                          '         RECALC')
+            else:
+                print( 'ERROR: trying to set a nodal load on a non-existent local Dof\n'
+                       '       nodal load not set\n'
+                      f'       target node external label and DoF: {nodeLab}, {locDof}')
         else:
             print( 'ERROR: trying to set a nodal load on a node that is not in the structure\n'
                    '       nodal load not set\n'
@@ -398,24 +417,28 @@ class Struc2D3Dof:
         """
         nodeLab: external label of node
         locDof: local DoF label
+                runs from 1 to nDof (engineering labeling)
         val: value imposed        
         """
         
-        # verify that the node does exist
-        for posibleNode in self.nodes:
-            if nodeLab==posibleNode.extLab:
-                # verify if the DoF is correct
-                if locDof in range(0,3):
-                    self.BC_dict[len(self.BC_dict)] = [posibleNode, locDof, val]   # dictionary for BCs input {internal_label:[node_object local_Dof_label, value]}
-                    if self.K_wBCs.mtx.size > 0:
-                        print('WARNING: trying to add a BC to a structure\n'
-                              '         whose BCs has already been imposed.\n'
-                              '         RECALC')
-                    break
-                else:
-                    print( 'ERROR: trying to set a BC on a non-existent local Dof\n'
-                           '       BC not set\n'
-                          f'       target node external label and DoF: {nodeLab}, {locDof}')
+        # find the node
+        nodeObjectsList = self.findNodes([nodeLab])
+        # check that the node does exist
+        if len(nodeObjectsList)==1:
+            node=nodeObjectsList[0]
+            locDof -= 1
+            # check if the DoF is correct
+            # try-except clause should check if locDof exists and inform
+            if locDof in range(0,3):
+                self.BC_dict[len(self.BC_dict)] = [node, locDof, val]   # dictionary for BCs input {internal_label:[node_object local_Dof_label, value]}
+                if self.K_wBCs.mtx.size > 0:
+                    print('WARNING: trying to add a BC to a structure\n'
+                          '         whose BCs has already been imposed.\n'
+                          '         RECALC')
+            else:
+                print( 'ERROR: trying to set a BC on a non-existent local Dof\n'
+                       '       BC not set\n'
+                      f'       target node external label and DoF: {nodeLab}, {locDof}')
         else:
             print( 'ERROR: trying to set a BC on a node that is not in the structure\n'
                    '       BC not set\n'
@@ -586,10 +609,142 @@ class Struc2D3Dof:
         # ELEMENTS
         for elm in self.elmts:
             elm.elmSolve()
+            
+    def getEqLab( self, nodeExtLab: int, locDof: int ):
+        """
+        determine global Dof label (eqLab) for node external label and local DoF
+        locDof runs from 0 to nDof-1
+        """
+        # check if the node exists
+        if any(   nodeExtLab==possibleNode.extLab   for possibleNode in self.nodes):
+            # find the node
+            for possibleNode in self.nodes:
+                if nodeExtLab==possibleNode.extLab:
+                    # try-except clause should determine if locDof exists and inform
+                    globalDof = possibleNode.dofLab[locDof]
+                    return globalDof
+                    break
+        else:
+            print( 'ERROR: trying to find a global DoF label for a node that is not in the structure\n'
+                  f'       node external label: {nodeExtLab}')
+                  
+    def getU( self, nodeExtLab: int, locDof: int ):
+        """
+        retrieve global displacement
+        locDof runs from 0 to nDof-1
+        """
+        globalDof = self.getEqLab( nodeExtLab, locDof )
+        U = self.U_full.vtr[globalDof]
+        return U
+                  
+    def getR( self, nodeExtLab: int, locDof: int ):
+        """
+        retrieve reaction
+        locDof runs from 0 to nDof-1
+        """
+        globalDof = self.getEqLab( nodeExtLab, locDof )
+        R = self.reacts.vtr[globalDof]
+        return R
+                  
+    def ask4U( self, nodeExtLab: int, locDof: int ):
+        """
+        retrieve global displacement
+        locDof runs from 1 to nDof (engineering labeling)
+        """
+        U = self.getU( nodeExtLab, locDof-1 )
+        return U
+                  
+    def ask4R( self, nodeExtLab: int, locDof: int ):
+        """
+        retrieve reaction
+        locDof runs from 1 to nDof (engineering labeling)
+        """
+        R = self.getR( nodeExtLab, locDof-1 )
+        return R
 
 
 # RUN
 if __name__ == '__main__':
+    
+    """
+    Example #1 for dsm.py
+    RC Hibbeler - Análisis Estructural - 8ed - Ejemplo 16.1
+    In SI units
+    Origin of coord. sys. on the bottom-left corner
+    """
+    if True:
+        # import numpy as np
+        # from dsm import Struc2D3Dof
+
+        # conversion factors
+        # input
+        feet2mm = 304.8
+        ksi2MPa = 6.89476
+        in22mm2 = 645.16
+        in42mm4 = 416231.426
+        kip2N   = 4448.22
+        # output
+        mm2in   = 0.0393701
+
+        # creat problem
+        str=Struc2D3Dof('simple frame')
+
+        # nodes
+        str.create_node(1, np.array([ 0*feet2mm, 20*feet2mm], dtype=float))
+        str.create_node(2, np.array([20*feet2mm, 20*feet2mm], dtype=float))
+        str.create_node(3, np.array([20*feet2mm,  0*feet2mm], dtype=float))
+
+        # elms
+        E=29e3*ksi2MPa
+        A=10*in22mm2
+        I=500*in42mm4
+        str.create_elm(1, [1,2],  E, A, I)
+        str.create_elm(2, [2,3],  E, A, I)
+
+        # loads
+        str.create_NL(2, 1, 5*kip2N)
+
+        # BCs
+        str.create_BC(1, 2, 0) # node 1 - pinned (vertical)
+        str.create_BC(3, 1, 0) # node 3 - fixed
+        str.create_BC(3, 2, 0) # node 3 - fixed
+        str.create_BC(3, 3, 0) # node 3 - fixed
+
+        # solve
+        str.assemble()
+        str.impose_BCs()
+        str.solve()
+
+        # print
+        print( 'Unknwon displacements:')
+        print(f'> D1: node 2, u_x = {str.ask4U(2,1)*mm2in:9.6f} in')
+        print(f'> D2: node 2, u_y = {str.ask4U(2,2)*mm2in:9.6f} in')
+        print(f'> D3: node 2, phi = {str.ask4U(2,3)      :9.6f} rad')
+        print(f'> D4: node 1, u_x = {str.ask4U(1,1)*mm2in:9.6f} in')
+        print(f'> D5: node 1, phi = {str.ask4U(1,3)      :9.6f} rad')
+        print( '')
+        print( 'Reactions:')
+        print(f'> Q6: node 1, R_y = {str.ask4R(1,2)/kip2N      :8.2f} kip')
+        print(f'> Q7: node 3, R_x = {str.ask4R(3,1)/kip2N      :8.2f} kip')
+        print(f'> Q8: node 3, R_y = {str.ask4R(3,2)/kip2N      :8.2f} kip')
+        print(f'> Q9: node 3, Mom = {str.ask4R(3,3)/kip2N*mm2in:8.2f} kip*in')
+        print( '')
+        print( 'Elemental nodal loads in global coordinates:')
+        print( 'element #1')
+        print(f'> elem 1, node i, L_xg = {str.elmts[0].L_glo[0]/kip2N      :8.2f} kip')
+        print(f'> elem 1, node i, L_yg = {str.elmts[0].L_glo[1]/kip2N      :8.2f} kip')
+        print(f'> elem 1, node i, mome = {str.elmts[0].L_glo[2]/kip2N*mm2in:8.2f} kip*in')
+        print(f'> elem 1, node j, L_xg = {str.elmts[0].L_glo[3]/kip2N      :8.2f} kip')
+        print(f'> elem 1, node j, L_yg = {str.elmts[0].L_glo[4]/kip2N      :8.2f} kip')
+        print(f'> elem 1, node j, mome = {str.elmts[0].L_glo[5]/kip2N*mm2in:8.2f} kip*in')
+        print( 'element #2')
+        print(f'> elem 2, node i, L_xg = {str.elmts[1].L_glo[0]/kip2N      :8.2f} kip')
+        print(f'> elem 2, node i, L_yg = {str.elmts[1].L_glo[1]/kip2N      :8.2f} kip')
+        print(f'> elem 2, node i, mome = {str.elmts[1].L_glo[2]/kip2N*mm2in:8.2f} kip*in')
+        print(f'> elem 2, node j, L_xg = {str.elmts[1].L_glo[3]/kip2N      :8.2f} kip')
+        print(f'> elem 2, node j, L_yg = {str.elmts[1].L_glo[4]/kip2N      :8.2f} kip')
+        print(f'> elem 2, node j, mome = {str.elmts[1].L_glo[5]/kip2N*mm2in:8.2f} kip*in')
+        
     
     # simple structure
     if False:
