@@ -1,0 +1,60 @@
+
+
+Created with DSM >>Direct Stifness Method<< vX.Y.Z-YYYYMMDD
+by Mauro S. Maza
+at Facultad de Ciencias Exactas, Físicas y Naturales | Universidad Nacional de Córdoba
+
+
+Problem name: simple frame
+Date: 31/08/2024 03:03:55
+Problem description: no description.
+
+
+PROBLEM DATA
+> Nodes labels, coordinates, internal labels and global DoF (eq. numbers)
+>> Number of nodes: 3
+>> Table
+  extLab   coord_1        coord_2       intLab    DoF1    DoF2    DoF3
+       1    0.00000e+00    6.09600e+03       0       0       1       2
+       2    6.09600e+03    6.09600e+03       1       3       4       5
+       3    6.09600e+03    0.00000e+00       2       6       7       8
+
+> Element global data
+>> Number of elements: 2
+>> Table
+  extLab  node_1  node_2  joints  E            A            I            intLab  L            gamma1   gamma2
+       1       1       2    none  1.99948e+05  6.45160e+03  2.08116e+08       0  6.09600e+03   1.0000   0.0000
+       2       2       3    none  1.99948e+05  6.45160e+03  2.08116e+08       1  6.09600e+03   0.0000  -1.0000
+
+> Loads
+>> Loads input
+>>> Number of loads: 1
+>>> Table
+    node     DoF    load
+       2       0    2.22411e+04
+
+>> Loads processed
+(TO BE IMPLEMENTED)
+
+> Boundary conditions
+>> BCs input
+>>> Number of loads: 1
+>>> Table
+    node     DoF    load
+       2       0    2.22411e+04
+
+>> BCs processed
+(TO BE IMPLEMENTED)
+
+INTERNAL DATA - (TO BE IMPLEMENTED)
+> Elemental matrices (global coordinates - with associated global DoFs)
+> Data relative to suppressed DoFs
+> Assembled matrix (K_full) and external load vector (L_full) (with associated global DoFs)
+> Assembled matrix (K_wBCs) and external load vector (L_wBCs) after BCs (with associated global DoFs)
+> Loads related to BCs (K_BCLo*BC_vals=vector) (with associated global DoFs)
+
+RESULTS - (TO BE IMPLEMENTED)
+> Displacements (for every node and DoF - table-formatted)
+> Reactions (for every node and DoF - table-formatted)
+> Elemental nodal loads (table-formatted)
+

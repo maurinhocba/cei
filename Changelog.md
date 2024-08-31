@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.0.0]alpha - 2024-08-27
+## [1.0.0]alpha - 2024-08-30
 No backward compatibility on nodal loads and boundary conditions definition.
 
 Cambios "externos":
@@ -8,6 +8,8 @@ Cambios "externos":
 - implementación de métodos para retrieve desplazamientos y reacciones en GGL específicos: ask4U() y ask4R() en Struc2D3Dof
 - implementación de método para retrieve elementos por etiqueta externa: Struc2D3Dof.ask4elem()
 - implementación de método para retrieve carga nodal elemental por etiqueta externa de elemento, etiqueta local de nodo y etiqueta local de GL: Struc2D3Dof.ask4ENL()
+- implementación de Struc2D3Dof.save2bin() (pensado para la salida)
+- implementación de Struc2D3Dof.report() (pensado para la salida)
 
 Cambios "internos":
 - cambio en la búsqueda de nodos por etiqueta externa:
@@ -19,6 +21,9 @@ Cambios "internos":
 - implementación de métodos getU() y getR() de Struc2D3Dof para hallar desplazamientos y reacciones según nodo y GL local
 - implementación de método Struc2D3Dof.findElmts() para hallar elementos por etiqueta externa
 - implementación de método ElmFrame2D.getL() para hallar carga nodal según nodo y GL local (en coordenadas globales y locales)
+- agregado de variables con nombre de la librería, versión, autor, filiación
+- implementación de primitiva matrix2FormattedTable() (pensada para la salida)
+- implementación de ElmFrame2D.reportBasic() (pensado para la salida)
 
 
 ## [0.0.0]alpha - 2024-08-24

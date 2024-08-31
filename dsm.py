@@ -3,6 +3,11 @@
 Direct Stifness Method
 Mauro S. Maza - FCEFyN (UNC) - 2024-06-23
 """
+libName='DSM >>Direct Stifness Method<<'
+libAuth='Mauro S. Maza'
+libAffi='Facultad de Ciencias Exactas, Físicas y Naturales | Universidad Nacional de Córdoba'
+libVers='vX.Y.Z-YYYYMMDD'
+
 
 """
 COSAS POR IMPLEMENTAR
@@ -13,13 +18,55 @@ COSAS POR IMPLEMENTAR
         # PROBAR SI AL CAMBIAR LAS COORDENADA DE UN NODO, SE ACTUALIZA LA REFERENCIA EN EL ELEMENTO
         
         # se puede mejorar la programación creando una función que ensamble cualquier cosa y usando eso múltiples veces
+- on BC input, check if BC already exists for that node and dof
 """
 
 # IMPORTING ZONE
 import numpy as np
 from typing import List
 import copy
+import pickle
+from datetime import datetime
 # import matplotlib.pyplot as plt
+
+
+# PRIMITIVES
+def matrix2FormattedTable( matrix: np.array([]), fmt: list ):
+    """
+    Accepts a NumPy array (ndim=1,2) and returns a formatted table in a string variable.
+    The numbers in each column are formatted according to de fmt argument.
+    fmt: list of list, each element being of the form [repetitions, format_string]
+    The sum of "repetitions" must be equal to the number of columns in matrix.
+    No spaces are added between elemnts by default.
+    "matrix" might be of dtype=object in order to accept "None" elements.
+    """
+    # prepare formatting strings
+    repSum=0
+    fs=[] # expanded list of formatting strings
+    for subList in fmt:
+        repSum+=subList[0]
+        for i in range(subList[0]):
+            fs.append(subList[1])
+    
+    # translate
+    if matrix.ndim==1  and  repSum==matrix.shape[0]:
+        fT='' # formatted table
+        for i in range(matrix.shape[0]):
+            fi=fs[i]
+            fT+=f'{ matrix[i] :{fi}}'
+        return fT
+    
+    elif matrix.ndim==2  and  repSum==matrix.shape[1]:
+        fT='' # formatted table
+        for i in range(matrix.shape[0]):
+            for j in range(matrix.shape[1]):
+                fT+=f'{ matrix[i,j]:{fs[j]}}'
+            else:
+                fT+='\n'
+        return fT
+        
+    else:
+        print('ERROR in matrix2FormattedTable input arguments')
 
 
 # CLASSES
@@ -248,6 +295,36 @@ class ElmFrame2D:
             L=self.L_glo[idx]
         return L
         
+    def reportBasic(self, titles=True, retType='string'):
+        """
+        Report element basic data
+        titles: if True and retType='string', the first line of "tab" has the labels of the info in the second line
+        retType: return type
+                 might be "string" or "matrix"
+                 if "matrix", "joint" info is not returned
+        """
+        mat1=np.block([ self.extLab, self.nodes[0].extLab, self.nodes[1].extLab ])
+        mat2=np.block([ self.E, self.A, self.I, self.intLab, self.L, self.t ])
+        if retType=='string':
+            #      extLab    nodes_extLabs
+            fmt1=[ [1,'8g'], [2,'8g'] ]
+            tab1=matrix2FormattedTable( mat1, fmt1 )
+            #      sec_props    intLab    L            t
+            fmt2=[ [3,'13.5e'], [1,'8g'], [1,'13.5e'], [2,'9.4f'] ]
+            tab2=matrix2FormattedTable( mat2, fmt2 )
+            
+            if titles:
+                # the following must be in accordance with fmt1 and fmt2
+                tab='  extLab  node_1  node_2  joints  E            A            I            intLab  L            gamma1   gamma2\n'
+            else:
+                tab=''
+                
+            tab += tab1 + f'{self.joints:>8}' + tab2
+            return tab
+        else:
+            mat=np.block([mat1,mat2])
+            return mat
+
 
 class Struc2D3Dof:
     """
@@ -269,7 +346,7 @@ class Struc2D3Dof:
         # stiffness matrices
         self.K_full = dpm()     # assembled global matrix (without BCs)
         self.K_wBCs = dpm()     # assembled global matrix with BCs (rows and cols deleted)
-        self.K_BCLo = dpm()     # columns of K_full associated to (zero and non-zero) BCs (added to load vector)
+        self.K_BCLo = dpm()     # columns of (row reduced-)K_full associated to (zero and non-zero) BCs (added to load vector)
         self.K_cc   = dpm()
         self.K_hc   = dpm()
         self.K_hh   = dpm()
@@ -502,7 +579,16 @@ class Struc2D3Dof:
         
     def delete_unused_dof(self):
         '''
-        assumes a symmetric stiffness matrix
+        Find global DoFs without associated stiffness
+        and delete corresponding rows and cols in "_full"
+        arrays of the structure and in BCs.
+        As the "_wBCs" arrays start as copies of the "_full" arrays,
+        they inherit the absence of this "suppressed DoFs".
+        No change is made to the NL_dict attribute.
+        No change is made to the elemental matrices or vectors.
+        Elemental displacement vectors are completed with zeros.
+        
+        This method assumes a symmetric assembled stiffness matrix.
         '''
         
         # DETERMINE ROWS AND COLS TO DELETE
@@ -717,8 +803,188 @@ class Struc2D3Dof:
         elm=elmList[0]
         ENL=elm.getL( nodeLocLab-1, locDof-1, local )
         return ENL
-
-
+        
+    def save2bin(self, fileName='', path=''):
+        """
+        fileName: string without extension
+        path: string
+              if '', file will be saved in local directory
+              might be
+                - a full path; example: 'E:\GitHub\cei'
+                - or a relative path; example: 'subfolder\subsufolder'
+              note that in both cases there is no initial or ending '\' character
+              the directory will not be created (in case it does not exist)
+        """
+        if fileName=='':
+            fileName=self.name
+        if path!='':
+            fileName=path+'\\'+fileName
+        
+        with open( fileName+'.pkl', 'wb') as binFile:
+            pickle.dump(self, binFile)
+            
+    
+    def report(self, fileName='', path=''):
+        """
+        fileName: string without extension
+        path: string
+              if '', file will be saved in local directory
+              might be
+                - a full path; example: 'E:\GitHub\cei'
+                - or a relative path; example: 'subfolder\subsufolder'
+              note that in both cases there is no initial or ending '\' character
+              the directory will not be created (in case it does not exist)
+        """
+        def dict2Arr(d,nDof):
+            """
+            NOT WORKING PROPERLY
+            NOT BEING USED
+            d: dict with data as NL_dict =  {internal_label:[node_object local_Dof_label, value]}.
+            nDof: number of DoFs that should be considered for the returned matrix/table.
+            "None" is set to the elements corresponding to DoFs without load or BC set.
+            The returned array cannot be prosseced by matrix2FormattedTable()
+            as for the 2024-08-30 version (becuase of the "None" elements).
+            """
+            # find nodes external labels and number of columns
+            labs=set() # empty set
+            maxDof=0
+            for l in d.values():
+                labs.add( l[0].extLab )
+                maxDof = max( maxDof, l[1] )
+            
+            # construct the array
+            arr=np.zeros( ( len(labs), maxDof+2 ), dtype=object)
+            arr.fill(None)
+            labs=list(labs)
+            labs.sort()
+            i=-1
+            for lab in labs: # one row for each node with data
+                i+=1
+                arr[i,0]=lab
+                for l in d.values():
+                    if lab==l[0].extLab:
+                        dof=l[1]
+                        val=l[2]
+                        if arr[i,dof+1] is None:
+                            arr[i,dof+1]=val
+                        else:
+                            arr[i,dof+1]+=val
+            return arr
+            
+        if fileName=='':
+            fileName=self.name
+        if path!='':
+            fileName=path+'\\'+fileName
+            
+        with open( fileName+'.rep', 'w') as repFile:
+            
+            # HEADLINE
+            headline = '\n\nCreated with '+libName+' '+libVers+ \
+                         '\nby '+libAuth+ \
+                         '\nat '+libAffi+'\n\n\n'
+            repFile.write(headline)
+            
+            # PROBLEM DESCRIPTION
+            repFile.write('Problem name: '+self.name+'\n')
+            DaT = datetime.now()
+            DaT = DaT.strftime("%d/%m/%Y %H:%M:%S")
+            repFile.write('Date: '+DaT+'\n')
+            if self.desc!='':
+                repFile.write('Problem description:\n    '+self.desc+'\n\n\n')
+            else:
+                repFile.write('Problem description: no description.\n\n\n')
+                
+            # PROBLEM DATA
+            repFile.write('PROBLEM DATA\n')
+            
+            # nodes
+            repFile.write( '> Nodes labels, coordinates, internal labels and global DoF (eq. numbers)\n')
+            repFile.write(f'>> Number of nodes: {len(self.nodes)}\n')
+            repFile.write( '>> Table\n')
+            # prepare data
+            n=self.nodes[0]
+            matrix=np.block([ n.extLab, n.coords, n.intLab, n.dofLab ])
+            for n in self.nodes[1:]:
+                nMtx = np.block([ n.extLab, n.coords, n.intLab, n.dofLab ])
+                matrix=np.block([[matrix],[nMtx]])
+            # the next works only for 2 coord and 3 DoF nodes
+            repFile.write('  extLab   coord_1        coord_2       intLab    DoF1    DoF2    DoF3\n')
+            #      extLab     coords       intLab    dofLab
+            fmt=[  [1,'8g'], [2,'15.5e'], [1,'8g'], [3,'8g']  ]
+            table=matrix2FormattedTable( matrix, fmt )
+            repFile.write(table)
+            repFile.write('\n')
+            
+            # elements
+            repFile.write( '> Element global data\n')
+            repFile.write(f'>> Number of elements: {len(self.elmts)}\n')
+            repFile.write( '>> Table\n')
+            # write titles
+            e=self.elmts[0]
+            repFile.write( e.reportBasic()+'\n' )
+            # write the rest
+            for e in self.elmts[1:]:
+                repFile.write( e.reportBasic(titles=False)+'\n' )
+            repFile.write('\n')
+            
+            # loads
+            repFile.write( '> Loads\n')
+            repFile.write( '>> Loads input\n')
+            repFile.write(f'>>> Number of loads: {len(self.NL_dict)}\n')
+            repFile.write( '>>> Table\n')
+            repFile.write('    node     DoF    load\n')
+            #     node      DoF       value
+            fmt=[ [1,'8g'], [1,'8g'], [1,'15.5e'] ]
+            for l in self.NL_dict.values():
+                mat=np.array( [ l[0].extLab, l[1], l[2] ] )
+                line = matrix2FormattedTable( mat, fmt )
+                repFile.write( line + '\n' )
+            repFile.write('\n')
+            repFile.write('>> Loads processed\n')
+            repFile.write('(TO BE IMPLEMENTED)\n')
+            # the next works only for 2 coord and 3 DoF nodes
+            #     node      values
+            # fmt=[ [1,'8g'], [3,'15.5e'] ]
+            # mat=dict2Arr(self.NL_dict)
+            # table=matrix2FormattedTable( mat, fmt )
+            # repFile.write('    node   L_in_DoF_1     L_in_DoF_2     L_in_DoF_3\n')
+            # repFile.write(table)
+            repFile.write('\n')
+            
+            # BCs
+            repFile.write( '> Boundary conditions\n')
+            repFile.write( '>> BCs input\n')
+            repFile.write(f'>>> Number of loads: {len(self.NL_dict)}\n')
+            repFile.write( '>>> Table\n')
+            repFile.write('    node     DoF    load\n')
+            #     node      DoF       value
+            fmt=[ [1,'8g'], [1,'8g'], [1,'15.5e'] ]
+            for l in self.NL_dict.values():
+                mat=np.array( [ l[0].extLab, l[1], l[2] ] )
+                line = matrix2FormattedTable( mat, fmt )
+                repFile.write( line + '\n' )
+            repFile.write('\n')
+            repFile.write('>> BCs processed\n')
+            repFile.write('(TO BE IMPLEMENTED)\n')
+            repFile.write('\n')
+                
+            # INTERNAL DATA
+            repFile.write('INTERNAL DATA - (TO BE IMPLEMENTED)\n')
+            repFile.write('> Elemental matrices (global coordinates - with associated global DoFs)\n')
+            repFile.write('> Data relative to suppressed DoFs\n')
+            repFile.write('> Assembled matrix (K_full) and external load vector (L_full) (with associated global DoFs)\n')
+            repFile.write('> Assembled matrix (K_wBCs) and external load vector (L_wBCs) after BCs (with associated global DoFs)\n')
+            repFile.write('> Loads related to BCs (K_BCLo*BC_vals=vector) (with associated global DoFs)\n')
+            repFile.write('\n')
+                
+            # RESULTS
+            repFile.write('RESULTS - (TO BE IMPLEMENTED)\n')
+            repFile.write('> Displacements (for every node and DoF - table-formatted)\n')
+            repFile.write('> Reactions (for every node and DoF - table-formatted)\n')
+            repFile.write('> Elemental nodal loads (table-formatted)\n')
+            repFile.write('\n')
+            
+            
 # RUN
 if __name__ == '__main__':
     
@@ -801,6 +1067,18 @@ if __name__ == '__main__':
         print(f'> elem 2, node j, L_yg = {str.ask4ENL( elemExtLab=2, nodeLocLab=2, locDof=2, local=False )/kip2N      :8.2f} kip')
         print(f'> elem 2, node j, mome = {str.ask4ENL( elemExtLab=2, nodeLocLab=2, locDof=3, local=False )/kip2N*mm2in:8.2f} kip*in')
         
+        # save the object as binary file
+        str.save2bin() # using the object's "name" attribute for the file name
+        str.save2bin( fileName='alternative name' )
+        
+        # read the objetc from binary file
+        with open('alternative name.pkl', 'rb') as binFile:
+            readObject = pickle.load(binFile)
+            if not str is readObject:
+                print('\n\nNow you have a deepcopy of the object loaded in memory\n\n')
+        
+        # print a report
+        str.report()
     
     # simple structure
     if False:
@@ -835,7 +1113,16 @@ if __name__ == '__main__':
             str.add_elm(elm2)
             str.add_elm(elm3)
     
-    
+    # try matrix2FormattedTable()
+    if False:
+        # array
+        integers=np.array([[1, 2, 3],[4, 5, 6]], dtype=int)
+        floatings=np.array([[1.1, 2.2, 3.33],[4, 5.888, 6.6]], dtype=float)
+        matrix=np.block([integers,floatings]) # integers are converted to floats
+        # format
+        fmt=[  [1,'g'], [2,'4g'], [3,'10.2e']  ]
+        table=matrix2FormattedTable( matrix, fmt )
+        print(table)
     
     
     
